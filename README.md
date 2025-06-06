@@ -87,8 +87,8 @@ We're actively seeking feedback during our beta phase! Please use this repositor
 - Tell us about your workflow and how Atuin Desktop could better support it
 
 ### 💬 General Discussion
-- Questions about usage? [Start a discussion](../../discussions)
-- Share your runbooks and workflows with the community
+
+Questions about usage? [Start a discussion](https://forum.atuin.sh)
 
 ## Roadmap
 
