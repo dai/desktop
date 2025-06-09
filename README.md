@@ -18,7 +18,7 @@
 
 ## 🚀 Closed Beta
 
-Atuin Desktop is currently in **closed beta**. We're actively collecting feedback and improving the experience based on real-world usage.
+Atuin Desktop is currently in **closed beta**. We're actively collecting feedback and improving the experience based on real-world usage. Join the [waitlist](https://wt.ls/atuin)
 
 > **Note**: The source code will be available in this repository soon. For now, this repo serves as the place for issue tracking, feature requests, and feedback during our beta phase.
 
