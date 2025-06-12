@@ -15,6 +15,7 @@
 
 ![Atuin Desktop Banner](https://blog.atuin.sh/content/images/2025/04/CleanShot-2025-04-22-at-15.28.30.png)
 
+（[English](README.md), [日本語](README-ja.md)）
 
 ## 🚀 Closed Beta
 
