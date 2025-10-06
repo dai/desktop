@@ -13,10 +13,18 @@ extra_css:
 
 nav:
   - "Home": index.md
-  - "Getting Started": getting-started.md
-  - "Workspaces": workspaces.md
-  - "Templating": templating.md
-  - "Secrets": secrets.md
+  - "Getting Started":
+      - "English": getting-started.md
+      - "日本語": getting-started_JA.md
+  - "Workspaces":
+      - "English": workspaces.md
+      - "日本語": workspaces_JA.md
+  - "Templating":
+      - "English": templating.md
+      - "日本語": templating_JA.md
+  - "Secrets":
+      - "English": secrets.md
+      - "日本語": secrets_JA.md
   - "Blocks":
       - blocks/index.md
       - "Executable":
