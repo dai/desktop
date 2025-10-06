@@ -24,7 +24,7 @@
 </picture>
 </p>
 
-（[English](README.md), [日本語](README-ja.md)）
+（[English](README.md), [日本語](README_JA.md)）
 
 ## 🚀 オープン ベータ
 
