@@ -1,111 +1,111 @@
 ---
-description: 操作ワークフローを、データベースクエリ、API呼び出し、スクリプトを実行する共同作業可能なランブックに変換します。
+description: Transform operational workflows into collaborative runbooks that execute database queries, API calls, and scripts.
 ---
 
-# :material-home: Atuin Desktopへようこそ
+# :material-home: Welcome to Atuin Desktop
 
-散在したターミナルコマンドからなる操作ワークフローを、実際に実行可能な強力で共同作業もできるランブックに変換します。
+Transform your operational workflows from scattered terminal commands into powerful, collaborative runbooks that actually execute.
 
-## Atuin Desktopとは？
+## What is Atuin Desktop?
 
-Atuin Desktopは、ドキュメンテーションと自動化の間のギャップを埋めます。豊富なドキュメンテーションと、ライブのデータベースクエリ、API呼び出し、スクリプト、ターミナルセッションを組み合わせた**実行可能なランブック**を作成します - すべて共同作業可能なブロックベースのエディタで行えます。
+Atuin Desktop bridges the gap between documentation and automation. Create **executable runbooks** that combine rich documentation with live database queries, API calls, scripts, and terminal sessions - all in a collaborative, block-based editor.
 
-!!! info "早期ベータ版"
-    私たちはまだ早期ベータ版であり、物事は急速に変化しています！皆様のフィードバックが、操作ドキュメンテーションの未来を形作る助けとなります。
+!!! info "Early Beta"
+    We're still in early beta and things are changing fast! Your feedback helps shape the future of operational documentation.
 
-## :material-lightning-bolt: なぜAtuin Desktopなのか？
+## :material-lightning-bolt: Why Atuin Desktop?
 
-**ターミナルからチームのワークフローへ**
-ドキュメントからコマンドをコピー＆ペーストするのはやめましょう。データベースクエリの実行、スクリプトの実行、API呼び出し、インフラ管理を行うランブックを構築し、チームと共有しましょう。
+**From Terminal to Team Workflow**  
+Stop copy-pasting commands from docs. Build runbooks that execute database queries, run scripts, make API calls, and manage infrastructure - then share them with your team.
 
-**直感的なブロックベースのエディタ**
-操作ワークフローと自動化のために特別に設計された柔軟なエディタで、コンテンツをドラッグ、ドロップ、再配置できます。
+**Intuitive Block-Based Editor**  
+Drag, drop, and rearrange content with a flexible editor designed specifically for operational workflows and automation.
 
-**リアルタイムコラボレーション**
-ライブ編集と実行により、インシデント対応、デプロイ手順、メンテナンスタスクで協力して作業できます。
+**Real-time Collaboration**  
+Work together on incident response, deployment procedures, and maintenance tasks with live editing and execution.
 
-## :material-rocket-launch: クイックスタート
+## :material-rocket-launch: Quick Start
 
-最初のランブックを作成する準備はできましたか？
+Ready to create your first runbook?
 
 <div class="grid cards" markdown>
 
--   :material-book-open:{ .lg .middle } **入門ガイド**
+-   :material-book-open:{ .lg .middle } **Getting Started Guide**
 
     ---
 
-    ランブック、ブロックの基本、そして最初の自動化ワークフローの作成方法を学びます。
+    Learn the basics of runbooks, blocks, and creating your first automated workflow.
 
-    [:octicons-arrow-right-24: 始める](getting-started.md)
+    [:octicons-arrow-right-24: Get Started](getting-started.md)
 
--   :material-cube:{ .lg .middle } **ブロックを探る**
+-   :material-cube:{ .lg .middle } **Explore Blocks**
 
     ---
 
-    ランブックに追加できるすべてのインタラクティブコンポーネントを発見してください。
+    Discover all the interactive components you can add to your runbooks.
 
-    [:octicons-arrow-right-24: ブロックを閲覧する](blocks/index.md)
+    [:octicons-arrow-right-24: Browse Blocks](blocks/index.md)
 
 </div>
 
-## :material-download: インストール
+## :material-download: Installation
 
-### デスクトップアプリケーション
+### Desktop Application
 
-リリースページからAtuin Desktopをダウンロードしてください。
+Download Atuin Desktop from our releases page 
 
-### CLI統合
+### CLI Integration
 
-Atuin Desktopは、ターミナル統合を強化するためにAtuin History CLIと組み合わせると最適に動作します。
+Atuin Desktop works best with the Atuin History CLI for enhanced terminal integration:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh
 ```
 
-[:octicons-link-external-24: 完全なCLIドキュメント](https://docs.atuin.sh)
+[:octicons-link-external-24: Full CLI Documentation](https://docs.atuin.sh)
 
-## :material-compass: ドキュメントを探る
+## :material-compass: Explore the Docs
 
 <div class="grid cards" markdown>
 
--   :material-database:{ .lg .middle } **データベースブロック**
+-   :material-database:{ .lg .middle } **Database Blocks**
 
     ---
 
-    MySQL、PostgreSQL、ClickHouse、SQLiteデータベースに接続します。
+    Connect to MySQL, PostgreSQL, ClickHouse, and SQLite databases.
 
-    [:octicons-arrow-right-24: データベースブロック](blocks/databases/index.md)
+    [:octicons-arrow-right-24: Database Blocks](blocks/databases/index.md)
 
--   :material-play:{ .lg .middle } **実行可能ブロック**
-
-    ---
-
-    スクリプトの実行、コマンドの実行、ワークフローの自動化を行います。
-
-    [:octicons-arrow-right-24: 実行可能ブロック](blocks/executable/README.md)
-
--   :material-code-braces:{ .lg .middle } **テンプレート**
+-   :material-play:{ .lg .middle } **Executable Blocks**
 
     ---
 
-    変数を使用して、動的で再利用可能なランブックを作成します。
+    Run scripts, execute commands, and automate workflows.
 
-    [:octicons-arrow-right-24: テンプレートガイド](templating.md)
+    [:octicons-arrow-right-24: Executable Blocks](blocks/executable/README.md)
+
+-   :material-code-braces:{ .lg .middle } **Templating**
+
+    ---
+
+    Create dynamic, reusable runbooks with variables.
+
+    [:octicons-arrow-right-24: Templating Guide](templating.md)
 
 -   :material-hub:{ .lg .middle } **Atuin Hub**
 
     ---
 
-    チームでランブックを共有し、共同作業を行います。
+    Share and collaborate on runbooks with your team.
 
-    [:octicons-arrow-right-24: コラボレーション機能](hub/getting-started.md)
+    [:octicons-arrow-right-24: Collaboration Features](hub/getting-started.md)
 
 </div>
 
-## 一般的な使用例
+## Common Use Cases
 
-**インシデント対応手順**の文書化、**新人エンジニアのオンボーディング**、**デプロイメントワークフローの自動化**、**インフラストラクチャメンテナンスの管理**など、Atuin Desktopは操作知識を構造化し実行するのを容易にします。
+Whether you're documenting **incident response procedures**, **onboarding new engineers**, **automating deployment workflows**, or **managing infrastructure maintenance**, Atuin Desktop makes it easy to structure and execute operational knowledge.
 
 ---
 
-**始める準備はできましたか？** [入門ガイド](getting-started.md)に飛び込んで、最初の実行可能なランブックを作成しましょう！
+**Ready to get started?** Jump into our [Getting Started Guide](getting-started.md) to create your first executable runbook!
