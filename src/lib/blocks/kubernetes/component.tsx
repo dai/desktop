@@ -48,6 +48,7 @@ import Block from "@/lib/blocks/common/Block";
 import { cn } from "@/lib/utils";
 import { KubernetesBlock } from "./schema";
 import { useCurrentRunbookId } from "@/context/runbook_id_context";
+import InterpreterSelector from "../common/InterpreterSelector";
 
 type KubernetesMode = "preset" | "custom";
 
@@ -89,7 +90,7 @@ export function KubernetesComponent({
   setName,
   setCommand,
   setMode,
-  setInterpreter: _setInterpreter, // Currently not used in the UI but kept for potential future use
+  setInterpreter,
   setAutoRefresh,
   setRefreshInterval,
   setNamespace,
@@ -210,6 +211,14 @@ export function KubernetesComponent({
       type="kubernetes-get"
       setName={setName}
       setDependency={() => {}}
+      topRightElement={
+        <InterpreterSelector
+          interpreter={kubernetes.interpreter}
+          onInterpreterChange={setInterpreter}
+          size="sm"
+          variant="flat"
+        />
+      }
       header={
         <>
           {kubernetes.mode === "preset" ? (

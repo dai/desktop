@@ -25,6 +25,7 @@ mod runbooks;
 mod runtime;
 mod secret;
 mod shared_state;
+mod shellcheck;
 mod sqlite;
 mod state;
 mod stats;
@@ -255,10 +256,12 @@ async fn history_calendar(
     // probs don't want to iterate _this_ many times, but it's only the last year. so 365
     // iterations at max. should be quick.
 
+    // Handle case where calendar is empty (can happen on Linux with XDG dir issues)
+    let default_entry = (String::new(), 0);
     let max = calendar
         .iter()
         .max_by_key(|d| d.1)
-        .expect("Can't find max count");
+        .unwrap_or(&default_entry);
 
     let ret = calendar
         .iter()
@@ -389,17 +392,26 @@ async fn apply_runbooks_migrations(app: &AppHandle) -> eyre::Result<()> {
 }
 
 fn main() {
-    env_logger::builder()
-        .filter(Some("atuin_desktop"), log::LevelFilter::Trace)
-        .init();
-
     let dev_prefix = if tauri::is_dev() {
         Some(env::var("DEV_PREFIX").unwrap_or("dev".to_string()))
     } else {
         None
     };
 
-    let builder = tauri::Builder::default();
+    let builder = tauri::Builder::default().plugin(
+        tauri_plugin_log::Builder::new()
+            .targets([
+                tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                    file_name: None,
+                }),
+            ])
+            .level(log::LevelFilter::Info)
+            .level_for("atuin_desktop", log::LevelFilter::Info)
+            .max_file_size(20_000_000)
+            .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(4))
+            .build(),
+    );
     let builder = if cfg!(debug_assertions) {
         builder
     } else {
@@ -482,10 +494,19 @@ fn main() {
             commands::stats::command_stats,
             commands::template::set_template_var,
             commands::template::get_template_var,
+            commands::block_state::set_block_local_state,
+            commands::block_state::get_block_local_state,
+            commands::block_state::get_block_local_state_all,
+            commands::block_state::delete_block_local_state,
+            commands::block_state::delete_block_local_state_all,
             commands::feedback::send_feedback,
             commands::mysql::mysql_query,
             commands::mysql::mysql_execute,
             commands::kubernetes::kubernetes_get_execute,
+            commands::blocks::execute_block,
+            commands::blocks::cancel_block_execution,
+            commands::events::subscribe_to_events,
+            commands::updates::check_for_updates,
             commands::workspaces::copy_welcome_workspace,
             commands::workspaces::reset_workspaces,
             commands::workspaces::watch_workspace,
@@ -508,6 +529,7 @@ fn main() {
             shared_state::update_shared_state_document,
             shared_state::delete_shared_state_document,
             shared_state::remove_optimistic_updates,
+            shellcheck::shellcheck,
         ])
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_http::init())
@@ -561,9 +583,18 @@ fn main() {
                 .app_config_dir()
                 .expect("Failed to get app config dir");
 
+            let use_hub_updater_service = env::var("USE_HUB_UPDATER_SERVICE").is_ok();
+            if use_hub_updater_service {
+                log::info!("Using Hub updater service");
+            }
+
             let handle_clone = handle.clone();
             run_async_command(async move {
-                handle.manage(state::AtuinState::new(dev_prefix, app_path));
+                handle.manage(state::AtuinState::new(
+                    dev_prefix,
+                    app_path,
+                    use_hub_updater_service,
+                ));
                 handle
                     .state::<state::AtuinState>()
                     .init(&handle_clone)

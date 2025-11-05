@@ -177,12 +177,41 @@ const GeneralSettings = () => {
   const backgroundSync = useStore((state) => state.backgroundSync);
   const syncConcurrency = useStore((state) => state.syncConcurrency);
 
-  const [vimModeEnabled, setVimModeEnabled, vimModeLoading] = useSettingsState(
+  const [vimModeEnabled, setVimModeEnabledState, vimModeLoading] = useSettingsState(
     "editor_vim_mode",
     false,
     Settings.editorVimMode,
     Settings.editorVimMode,
   );
+
+  function setVimModeEnabled(enabled: boolean) {
+    setVimModeEnabledState(enabled);
+    useStore.getState().setVimModeEnabled(enabled);
+  }
+
+  const [shellCheckEnabled, setShellCheckEnabledState, shellCheckEnabledLoading] = useSettingsState(
+    "shellcheck_enabled",
+    false,
+    Settings.shellCheckEnabled,
+    Settings.shellCheckEnabled,
+  );
+
+  const [shellCheckPath, setShellCheckPathState, shellCheckPathLoading] = useSettingsState(
+    "shellcheck_path",
+    "",
+    Settings.shellCheckPath,
+    Settings.shellCheckPath,
+  );
+
+  function setShellCheckEnabled(enabled: boolean) {
+    setShellCheckEnabledState(enabled);
+    useStore.getState().setShellCheckEnabled(enabled);
+  }
+
+  function setShellCheckPath(path: string) {
+    setShellCheckPathState(path);
+    useStore.getState().setShellCheckPath(path);
+  }
 
   const themes = [
     ["Abcdef", "abcdef"],
@@ -267,7 +296,12 @@ const GeneralSettings = () => {
     promptToRestart();
   }
 
-  if (isLoading || vimModeLoading) return <Spinner />;
+  if (
+    isLoading ||
+    vimModeLoading ||
+    shellCheckEnabledLoading ||
+    shellCheckPathLoading
+  ) return <Spinner />;
 
   return (
     <>
@@ -400,6 +434,27 @@ const GeneralSettings = () => {
             onValueChange={setVimModeEnabled}
             description="Enable Vim key bindings in code editors"
           />
+
+          <SettingSwitch
+            className="mt-4"
+            label="Enable ShellCheck"
+            isSelected={shellCheckEnabled}
+            onValueChange={setShellCheckEnabled}
+            description="Enable ShellCheck static analysis for shell scripts in code editors"
+          />
+
+          {shellCheckEnabled && (
+            <div className="mt-4">
+              <SettingInput
+                type="text"
+                label="ShellCheck path"
+                value={shellCheckPath || ""}
+                onChange={setShellCheckPath}
+                placeholder=""
+                description="(Optional) Path to the ShellCheck command line tool if it's not allready in PATH"
+              />
+            </div>
+          )}
 
           <div className="mt-2 ml-1">
             <Link
@@ -696,8 +751,20 @@ const AISettings = () => {
     Settings.aiApiKey,
     Settings.aiApiKey,
   );
+  const [aiApiEndpoint, setAiApiEndpoint, endpointLoading] = useSettingsState(
+    "ai_api_endpoint",
+    "",
+    Settings.aiApiEndpoint,
+    Settings.aiApiEndpoint,
+  );
+  const [aiModel, setAiModel, modelLoading] = useSettingsState(
+    "ai_model",
+    "",
+    Settings.aiModel,
+    Settings.aiModel,
+  );
 
-  if (enabledLoading || keyLoading) return <Spinner />;
+  if (enabledLoading || keyLoading || endpointLoading || modelLoading) return <Spinner />;
 
   return (
     <Card shadow="sm">
@@ -713,14 +780,32 @@ const AISettings = () => {
         />
 
         {aiEnabled && (
-          <SettingInput
-            type="password"
-            label="Anthropic API Key"
-            value={aiApiKey || ""}
-            onChange={setAiApiKey}
-            placeholder="sk-ant-api03-..."
-            description="Your Anthropic API key for Claude models"
-          />
+          <>
+            <SettingInput
+              type="password"
+              label="API Key"
+              value={aiApiKey || ""}
+              onChange={setAiApiKey}
+              placeholder="sk-..."
+              description="Your OpenRouter/OpenAI API key"
+            />
+            <SettingInput
+              type="text"
+              label="API Endpoint"
+              value={aiApiEndpoint || ""}
+              onChange={setAiApiEndpoint}
+              placeholder="https://openrouter.ai/api/v1"
+              description="OpenAI-compatible API endpoint (default: OpenRouter)"
+            />
+            <SettingInput
+              type="text"
+              label="Model"
+              value={aiModel || ""}
+              onChange={setAiModel}
+              placeholder="anthropic/claude-sonnet-4"
+              description="Model name (e.g., anthropic/claude-sonnet-4, openai/gpt-4)"
+            />
+          </>
         )}
       </CardBody>
     </Card>

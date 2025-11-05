@@ -16,6 +16,7 @@ export interface Tab {
   url: string;
   title: string;
   icon: TabIcon | null;
+  badge: string | null;
 }
 
 export class TabUri {
@@ -38,6 +39,8 @@ export interface AtuinUiState {
   focused: boolean;
   connectedToHubSocket: boolean;
   searchOpen: boolean;
+  commandPaletteOpen: boolean;
+  newWorkspaceDialogOpen: boolean;
   proposedDesktopConnectUser: { username: string; token: string } | undefined;
   isSyncing: boolean;
   colorMode: ColorMode;
@@ -56,6 +59,7 @@ export interface AtuinUiState {
   sidebarClickStyle: "link" | "explorer";
   lastSidebarDragInfo: { itemIds: string[]; sourceWorkspaceId: string } | undefined;
   didSidebarSetup: boolean;
+  savingBlock: Option<any>;
 
   tabs: Tab[];
   currentTabId: string | null;
@@ -64,11 +68,16 @@ export interface AtuinUiState {
 
   lightModeEditorTheme: string;
   darkModeEditorTheme: string;
+  vimModeEnabled: boolean;
+  shellCheckEnabled: boolean;
+  shellCheckPath: string;
 
   setAppVersion: (version: string) => void;
   setFocused: (focused: boolean) => void;
   setConnectedToHubSocket: (online: boolean) => void;
   setSearchOpen: (open: boolean) => void;
+  setCommandPaletteOpen: (open: boolean) => void;
+  setNewWorkspaceDialogOpen: (open: boolean) => void;
   setProposedDesktopConnectuser: (proposedUser?: { username: string; token: string }) => void;
   setIsSyncing: (isSyncing: boolean) => void;
   setColorMode: (colorMode: ColorMode) => void;
@@ -87,6 +96,7 @@ export interface AtuinUiState {
   moveTab: (id: string, index: number) => void;
   undoCloseTab: () => void;
   setTabTitle: (id: string, title: string) => void;
+  setTabBadge: (id: string, badge: string | null) => void;
   advanceActiveTab: (amount: number) => void;
   closeAllTabs: () => void;
   closeOtherTabs: (id: string) => void;
@@ -94,9 +104,14 @@ export interface AtuinUiState {
   closeRightTabs: (id: string) => void;
   closeTabs: (predicate: (tab: Tab) => boolean) => void;
   registerTabOnClose: (id: string, callback: (tab: Tab) => Promise<boolean>) => void;
+  setSavingBlock: (block: any) => void;
+  clearSavingBlock: () => void;
 
   setLightModeEditorTheme: (theme: string) => void;
   setDarkModeEditorTheme: (theme: string) => void;
+  setVimModeEnabled: (enabled: boolean) => void;
+  setShellCheckEnabled: (enabled: boolean) => void;
+  setShellCheckPath: (path: string) => void;
 
   getFolderState: (workspaceId: string) => Option<Record<string, boolean>>;
   toggleFolder: (workspaceId: string, folderId: string) => void;
@@ -116,6 +131,8 @@ export const persistUiKeys: (keyof AtuinUiState)[] = [
   "sidebarClickStyle",
   "lightModeEditorTheme",
   "darkModeEditorTheme",
+  "vimModeEnabled",
+  "shellCheckEnabled",
   "hiddenWorkspaces",
   "tabs",
   "currentTabId",
@@ -126,6 +143,8 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   focused: false,
   connectedToHubSocket: false,
   searchOpen: false,
+  commandPaletteOpen: false,
+  newWorkspaceDialogOpen: false,
   proposedDesktopConnectUser: undefined,
   isSyncing: false,
   colorMode: "system",
@@ -142,6 +161,7 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   sidebarClickStyle: "link",
   lastSidebarDragInfo: undefined,
   didSidebarSetup: false,
+  savingBlock: None,
 
   tabs: [],
   currentTabId: null,
@@ -150,11 +170,16 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
 
   lightModeEditorTheme: "githubLight",
   darkModeEditorTheme: "githubDark",
+  vimModeEnabled: false,
+  shellCheckEnabled: false,
+  shellCheckPath: "",
 
   setAppVersion: (version: string) => set(() => ({ appVersion: Some(version) })),
   setFocused: (focused: boolean) => set(() => ({ focused })),
   setConnectedToHubSocket: (online: boolean) => set(() => ({ connectedToHubSocket: online })),
   setSearchOpen: (open) => set(() => ({ searchOpen: open })),
+  setCommandPaletteOpen: (open) => set(() => ({ commandPaletteOpen: open })),
+  setNewWorkspaceDialogOpen: (open) => set(() => ({ newWorkspaceDialogOpen: open })),
   setProposedDesktopConnectuser: (proposedUser?) =>
     set(() => ({ proposedDesktopConnectUser: proposedUser })),
   setIsSyncing: (isSyncing: boolean) => set(() => ({ isSyncing })),
@@ -181,7 +206,11 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
       const tabsAfter = tabs.slice(currentTabIndex + 1);
       const id = uuidv7();
       set(() => ({
-        tabs: [...tabsBefore, { id, url, title: title || url, icon: icon || null }, ...tabsAfter],
+        tabs: [
+          ...tabsBefore,
+          { id, url, title: title || url, icon: icon || null, badge: null },
+          ...tabsAfter,
+        ],
         currentTabId: id,
       }));
     } else {
@@ -274,6 +303,14 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
       set(() => ({ tabs: tabs }));
     }
   },
+  setTabBadge: (id: string, badge: string | null) => {
+    const tabs = get().tabs;
+    const tab = tabs.find((tab) => tab.id === id);
+    if (tab) {
+      tab.badge = badge;
+      set(() => ({ tabs: tabs }));
+    }
+  },
   advanceActiveTab: (amount: number) => {
     const tabs = get().tabs;
     const currentTabId = get().currentTabId;
@@ -346,8 +383,14 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
     };
   },
 
+  setSavingBlock: (block: any) => set(() => ({ savingBlock: Some(block) })),
+  clearSavingBlock: () => set(() => ({ savingBlock: None })),
+
   setLightModeEditorTheme: (theme: string) => set(() => ({ lightModeEditorTheme: theme })),
   setDarkModeEditorTheme: (theme: string) => set(() => ({ darkModeEditorTheme: theme })),
+  setVimModeEnabled: (enabled: boolean) => set(() => ({ vimModeEnabled: enabled })),
+  setShellCheckEnabled: (enabled: boolean) => set(() => ({ shellCheckEnabled: enabled })),
+  setShellCheckPath: (path: string) => set(() => ({ shellCheckPath: path })),
 
   getFolderState: (workspaceId: string) => Some(get().folderState[workspaceId]),
   toggleFolder: (workspaceId: string, folderId: string) => {

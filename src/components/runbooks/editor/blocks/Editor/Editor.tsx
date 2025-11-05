@@ -10,7 +10,7 @@ import track_event from "@/tracking";
 import CodeMirror, { Extension } from "@uiw/react-codemirror";
 
 import "@xterm/xterm/css/xterm.css";
-import { ChevronDownIcon, CodeIcon, RefreshCwIcon, RefreshCwOffIcon } from "lucide-react";
+import { ChevronDownIcon, CodeIcon, RefreshCwIcon, RefreshCwOffIcon, ArrowDownToLineIcon, ArrowUpToLineIcon } from "lucide-react";
 import {
   Dropdown,
   DropdownTrigger,
@@ -32,9 +32,11 @@ import useCodemirrorTheme from "@/lib/hooks/useCodemirrorTheme.ts";
 import { useCodeMirrorValue } from "@/lib/hooks/useCodeMirrorValue";
 import Block from "@/lib/blocks/common/Block";
 import { getTemplateVar, setTemplateVar } from "@/state/templates";
-import { exportPropMatter } from "@/lib/utils";
+import { exportPropMatter, cn } from "@/lib/utils";
 import { useCurrentRunbookId } from "@/context/runbook_id_context";
 import RunbookBus from "@/lib/app/runbook_bus";
+import { useBlockLocalState } from "@/lib/hooks/useBlockLocalState";
+import { createBlockNoteExtension } from "@blocknote/core";
 
 interface LanguageLoader {
   name: string;
@@ -80,6 +82,9 @@ interface CodeBlockProps {
   syncVariable: boolean;
   isEditable: boolean;
   onCodeMirrorFocus?: () => void;
+  
+  collapseCode: boolean;
+  setCollapseCode: (collapse: boolean) => void;
 }
 
 const EditorBlock = ({
@@ -96,6 +101,8 @@ const EditorBlock = ({
   setName,
   editor,
   onCodeMirrorFocus,
+  collapseCode,
+  setCollapseCode,
 }: CodeBlockProps) => {
   const languages: LanguageLoader[] = useMemo(() => languageLoaders(), []);
   const currentRunbookId = useCurrentRunbookId();
@@ -181,6 +188,16 @@ const EditorBlock = ({
                   isDisabled={!isEditable || variableName.trim() === ""}
                 />
               </Tooltip>
+              <Tooltip content={collapseCode ? "Expand code" : "Collapse code"}>
+                <Button
+                  onPress={() => setCollapseCode(!collapseCode)}
+                  size="sm"
+                  variant="flat"
+                  isIconOnly
+                >
+                  {collapseCode ? <ArrowDownToLineIcon size={20} /> : <ArrowUpToLineIcon size={20} />}
+                </Button>
+              </Tooltip>
               <Dropdown
                 isOpen={isOpen}
                 onOpenChange={(open) => setIsOpen(open)}
@@ -236,17 +253,24 @@ const EditorBlock = ({
         </div>
       }
     >
-      <CodeMirror
-        className="!pt-0 max-w-full border border-gray-300 rounded flex-grow max-h-1/2 overflow-scroll"
-        placeholder={"Write some code..."}
-        value={codeMirrorValue.value}
-        readOnly={!isEditable}
-        onChange={codeMirrorValue.onChange}
-        onFocus={onCodeMirrorFocus}
-        extensions={extension ? [extension] : []}
-        basicSetup={true}
-        theme={themeObj}
-      />
+      <div className={cn("w-full transition-all duration-300 ease-in-out relative", {
+        "max-h-10 overflow-hidden": collapseCode,
+      })}>
+        <CodeMirror
+          className="!pt-0 max-w-full border border-gray-300 rounded flex-grow max-h-1/2 overflow-scroll"
+          placeholder={"Write some code..."}
+          value={codeMirrorValue.value}
+          readOnly={!isEditable}
+          onChange={codeMirrorValue.onChange}
+          onFocus={onCodeMirrorFocus}
+          extensions={extension ? [extension] : []}
+          basicSetup={true}
+          theme={themeObj}
+        />
+        {collapseCode && (
+          <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-white dark:from-gray-900 to-transparent pointer-events-none" />
+        )}
+      </div>
     </Block>
   );
 };
@@ -278,6 +302,11 @@ export default createReactBlockSpec(
     // @ts-ignore
     render: ({ block, editor, code, type }) => {
       const currentRunbookId = useCurrentRunbookId();
+      const [collapseCode, setCollapseCode] = useBlockLocalState<boolean>(
+        block.id,
+        "collapsed",
+        false
+      );
 
       const handleCodeMirrorFocus = () => {
         // Ensure BlockNote knows which block contains the focused CodeMirror
@@ -354,10 +383,25 @@ export default createReactBlockSpec(
           syncVariable={block.props.syncVariable}
           isEditable={editor.isEditable}
           onCodeMirrorFocus={handleCodeMirrorFocus}
+          collapseCode={collapseCode}
+          setCollapseCode={setCollapseCode}
         />
       );
     },
   },
+  [
+    createBlockNoteExtension({
+      key: "editor-shortcut",
+      inputRules: [
+        {
+          find: new RegExp("^```$"),
+          replace() {
+            return { type: "editor", props: {}, content: [] };
+          },
+        },
+      ],
+    }),
+  ],
 );
 
 export const insertEditor = (schema: any) => (editor: typeof schema.BlockNoteEditor) => ({

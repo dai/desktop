@@ -13,10 +13,10 @@ import { useBlockNoteEditor } from "@blocknote/react";
 import "@xterm/xterm/css/xterm.css";
 import { AtuinState, useStore } from "@/state/store.ts";
 import { addToast, Button, Chip, Spinner, Tooltip } from "@heroui/react";
-import { formatDuration } from "@/lib/utils.ts";
+import { formatDuration, cn } from "@/lib/utils.ts";
 import { usePtyStore } from "@/state/ptyStore.ts";
 import track_event from "@/tracking.ts";
-import { Clock, Eye, EyeOff, Maximize2, Minimize2 } from "lucide-react";
+import { Clock, Eye, EyeOff, Maximize2, Minimize2, ArrowDownToLineIcon, ArrowUpToLineIcon } from "lucide-react";
 import EditableHeading from "@/components/EditableHeading/index.tsx";
 import { templateString } from "@/state/templates.ts";
 import CodeEditor, { TabAutoComplete } from "../common/CodeEditor/CodeEditor.tsx";
@@ -51,6 +51,9 @@ interface RunBlockProps {
   setOutputVisible: (visible: boolean) => void;
   setDependency: (dependency: DependencySpec) => void;
   onCodeMirrorFocus?: () => void;
+  
+  collapseCode: boolean;
+  setCollapseCode: (collapse: boolean) => void;
 
   terminal: TerminalBlock;
 }
@@ -65,6 +68,8 @@ export const RunBlock = ({
   terminal,
   setDependency,
   onCodeMirrorFocus,
+  collapseCode,
+  setCollapseCode,
 }: RunBlockProps) => {
   let editor = useBlockNoteEditor();
   const colorMode = useStore((state) => state.functionalColorMode);
@@ -94,11 +99,7 @@ export const RunBlock = ({
     return colorMode === "dark" ? darkModeEditorTheme : lightModeEditorTheme;
   }, [colorMode, lightModeEditorTheme, darkModeEditorTheme]);
 
-  // This ensures that the first time we run a block, it executes the code. But subsequent mounts of an already-existing pty
-  // don't run the code again.
-  // We have to write to the pty from the terminal component atm, because it needs to be listening for data from the pty before
-  // we write to it.
-  const [firstOpen, setFirstOpen] = useState<boolean>(false);
+
 
   const currentRunbookId = useCurrentRunbookId();
 
@@ -265,7 +266,6 @@ export const RunBlock = ({
       try {
         let p = await openPty();
         setIsLoading(false);
-        setFirstOpen(true);
 
         if (onRun) onRun(p);
       } catch (error) {
@@ -432,6 +432,14 @@ export const RunBlock = ({
                   {isFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
                 </button>
               </Tooltip>
+              <Tooltip content={collapseCode ? "Expand code" : "Collapse code"}>
+                <button
+                  onClick={() => setCollapseCode(!collapseCode)}
+                  className="p-2 hover:bg-default-100 rounded-md"
+                >
+                  {collapseCode ? <ArrowDownToLineIcon size={20} /> : <ArrowUpToLineIcon size={20} />}
+                </button>
+              </Tooltip>
             </div>
           </div>
 
@@ -445,22 +453,29 @@ export const RunBlock = ({
               onRefresh={handleRefresh}
               alwaysStop
             />
-            <CodeEditor
-              id={terminal.id}
-              code={terminal.code}
-              onChange={onChange}
-              isEditable={isEditable}
-              language="bash"
-              theme={theme}
-              onFocus={onCodeMirrorFocus}
-              keyMap={[
-                TabAutoComplete,
-                {
-                  key: "Mod-Enter",
-                  run: handleCmdEnter,
-                },
-              ]}
-            />
+            <div className={cn("min-w-0 flex-1 overflow-x-auto transition-all duration-300 ease-in-out relative", {
+              "max-h-10 overflow-hidden": collapseCode,
+            })}>
+              <CodeEditor
+                id={terminal.id}
+                code={terminal.code}
+                onChange={onChange}
+                isEditable={isEditable}
+                language="bash"
+                theme={theme}
+                onFocus={onCodeMirrorFocus}
+                keyMap={[
+                  TabAutoComplete,
+                  {
+                    key: "Mod-Enter",
+                    run: handleCmdEnter,
+                  },
+                ]}
+              />
+              {collapseCode && (
+                <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-white dark:from-gray-900 to-transparent pointer-events-none" />
+              )}
+            </div>
           </div>
         </>
       }
@@ -473,7 +488,6 @@ export const RunBlock = ({
                 block_id={terminal.id}
                 pty={pty.pid}
                 script={terminal.code}
-                runScript={firstOpen}
                 setCommandRunning={setCommandRunning}
                 setExitCode={setExitCode}
                 setCommandDuration={setCommandDuration}
@@ -529,7 +543,6 @@ export const RunBlock = ({
                 block_id={terminal.id}
                 pty={pty.pid}
                 script={terminal.code}
-                runScript={false}
                 setCommandRunning={setCommandRunning}
                 setExitCode={setExitCode}
                 setCommandDuration={setCommandDuration}

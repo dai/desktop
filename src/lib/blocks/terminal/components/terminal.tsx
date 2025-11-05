@@ -32,7 +32,6 @@ const TerminalComponent = ({
   block_id,
   pty,
   script,
-  runScript,
   setCommandRunning,
   setExitCode,
   setCommandDuration,
@@ -92,12 +91,14 @@ const TerminalComponent = ({
 
       window.addEventListener("resize", windowResize);
 
-      if (runScript) {
+      // Run script only if it hasn't been run before for this PTY
+      if (!terminalData.hasRunInitialScript && script && terminalData.terminal.element) {
         let isWindows = platform() == "windows";
         let cmdEnd = isWindows ? "\r\n" : "\n";
         let val = !script.endsWith("\n") ? script + cmdEnd : script;
 
         terminalData.write(block_id, val, editor.document, currentRunbookId);
+        terminalData.hasRunInitialScript = true;
       }
     }
 

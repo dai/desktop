@@ -10,14 +10,21 @@ import {
   SideMenu,
   SideMenuController,
   DragHandleMenu,
-  RemoveBlockItem,
 } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
 
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 
-import { FolderOpenIcon, VariableIcon, TextCursorInputIcon, EyeIcon, LinkIcon } from "lucide-react";
+import {
+  FolderOpenIcon,
+  VariableIcon,
+  TextCursorInputIcon,
+  EyeIcon,
+  LinkIcon,
+  BlocksIcon,
+  MinusIcon,
+} from "lucide-react";
 
 import { AIGeneratePopup } from "./AIGeneratePopup";
 import AIPopup from "./ui/AIPopup";
@@ -63,6 +70,9 @@ import { calculateAIPopupPosition, calculateLinkPopupPosition } from "./utils/po
 import { useTauriEvent } from "@/lib/tauri";
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
+import { SaveBlockItem } from "./ui/SaveBlockItem";
+import { SavedBlockPopup } from "./ui/SavedBlockPopup";
+import { DeleteBlockItem } from "./ui/DeleteBlockItem";
 
 // Fix for react-dnd interference with BlockNote drag-and-drop
 // React-dnd wraps dataTransfer in a proxy that blocks access during drag operations
@@ -171,6 +181,44 @@ const insertRunbookLink = (
   group: "Content",
 });
 
+const insertSavedBlock = (
+  editor: typeof schema.BlockNoteEditor,
+  showSavedBlockPopup: (position: { x: number; y: number }) => void,
+) => ({
+  title: "Saved Block",
+  subtext: "Insert a saved block",
+  onItemClick: () => {
+    track_event("runbooks.block.create", { type: "saved_block" });
+
+    const position = calculateLinkPopupPosition(editor);
+    showSavedBlockPopup(position);
+  },
+  icon: <BlocksIcon size={18} />,
+  aliases: ["saved", "block"],
+  group: "Content",
+});
+
+const insertHorizontalRule = (editor: typeof schema.BlockNoteEditor) => ({
+  title: "Horizontal Rule",
+  subtext: "Insert a horizontal divider line",
+  onItemClick: () => {
+    track_event("runbooks.block.create", { type: "horizontal_rule" });
+
+    editor.insertBlocks(
+      [
+        {
+          type: "horizontal_rule",
+        },
+      ],
+      editor.getTextCursorPosition().block.id,
+      "before",
+    );
+  },
+  icon: <MinusIcon size={18} />,
+  aliases: ["hr", "horizontal", "rule", "divider", "separator", "line"],
+  group: "Content",
+});
+
 // AI Generate function
 const insertAIGenerate = (
   editor: any,
@@ -210,6 +258,8 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
   const [isVisible, setIsVisible] = useState(true);
   const [runbookLinkPopupVisible, setRunbookLinkPopupVisible] = useState(false);
   const [runbookLinkPopupPosition, setRunbookLinkPopupPosition] = useState({ x: 0, y: 0 });
+  const [savedBlockPopupVisible, setSavedBlockPopupVisible] = useState(false);
+  const [savedBlockPopupPosition, setSavedBlockPopupPosition] = useState({ x: 0, y: 0 });
 
   // Check AI enabled status
   useEffect(() => {
@@ -230,8 +280,17 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
     setRunbookLinkPopupVisible(true);
   }, []);
 
+  const showSavedBlockPopup = useCallback((position: { x: number; y: number }) => {
+    setSavedBlockPopupPosition(position);
+    setSavedBlockPopupVisible(true);
+  }, []);
+
   const closeRunbookLinkPopup = useCallback(() => {
     setRunbookLinkPopupVisible(false);
+  }, []);
+
+  const closeSavedBlockPopup = useCallback(() => {
+    setSavedBlockPopupVisible(false);
   }, []);
 
   const handleExportMarkdown = async () => {
@@ -287,6 +346,22 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
     [editor, closeRunbookLinkPopup],
   );
 
+  const handleSavedBlockSelect = useCallback(
+    (_savedBlockId: string, block: any) => {
+      if (!editor) return;
+
+      editor.insertBlocks([block], editor.getTextCursorPosition().block.id, "after");
+
+      closeSavedBlockPopup();
+
+      // Focus back to the editor and position cursor after the inserted link
+      setTimeout(() => {
+        editor.focus();
+      }, 10);
+    },
+    [editor, closeSavedBlockPopup],
+  );
+
   const getEditorContext = useCallback(async () => {
     if (!editor) return undefined;
 
@@ -312,17 +387,36 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
     }
   }, [editor]);
 
-  const handleAIGenerate = useCallback(
-    (blocks: any[]) => {
+  const insertionAnchorRef = useRef<string | null>(null);
+  const lastInsertedBlockRef = useRef<string | null>(null);
+
+  const handleBlockGenerated = useCallback(
+    (block: any) => {
       if (!editor) return;
 
-      const currentPosition = editor.getTextCursorPosition();
-
-      editor.insertBlocks(blocks, currentPosition.block.id, "after");
-      closeAIPopup();
+      // On first block, store the anchor (cursor position) and insert after it
+      if (!insertionAnchorRef.current) {
+        insertionAnchorRef.current = editor.getTextCursorPosition().block.id;
+      }
+      
+      // Insert after the last inserted block, or after anchor if this is the first
+      const insertAfterId = lastInsertedBlockRef.current || insertionAnchorRef.current;
+      
+      const insertedBlocks = editor.insertBlocks([block], insertAfterId, "after");
+      
+      // Track the last inserted block for the next one
+      if (insertedBlocks && insertedBlocks.length > 0) {
+        lastInsertedBlockRef.current = insertedBlocks[0].id;
+      }
     },
-    [editor, closeAIPopup],
+    [editor],
   );
+
+  const handleGenerateComplete = useCallback(() => {
+    insertionAnchorRef.current = null;
+    lastInsertedBlockRef.current = null;
+    closeAIPopup();
+  }, [closeAIPopup]);
 
   const serialExecuteCallback = useCallback(async () => {
     if (!editor || !runbook) {
@@ -606,6 +700,8 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
 
                 // Content group
                 insertRunbookLink(editor as any, showRunbookLinkPopup),
+                insertSavedBlock(editor as any, showSavedBlockPopup),
+                insertHorizontalRule(editor as any),
 
                 // Monitoring group
                 insertPrometheus(schema)(editor),
@@ -640,8 +736,9 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
               style={{ zIndex: 0 }}
               dragHandleMenu={(props) => (
                 <DragHandleMenu {...props}>
-                  <RemoveBlockItem {...props}>Delete</RemoveBlockItem>
+                  <DeleteBlockItem {...props} />
                   <DuplicateBlockItem {...props} />
+                  <SaveBlockItem {...props} />
                 </DragHandleMenu>
               )}
             ></SideMenu>
@@ -654,7 +751,8 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
         <AIGeneratePopup
           isVisible={aiPopupVisible}
           position={aiPopupPosition}
-          onGenerate={handleAIGenerate}
+          onBlockGenerated={handleBlockGenerated}
+          onGenerateComplete={handleGenerateComplete}
           onClose={closeAIPopup}
           getEditorContext={getEditorContext}
         />
@@ -678,6 +776,12 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
         position={runbookLinkPopupPosition}
         onSelect={handleRunbookLinkSelect}
         onClose={closeRunbookLinkPopup}
+      />
+      <SavedBlockPopup
+        isVisible={savedBlockPopupVisible}
+        position={savedBlockPopupPosition}
+        onSelect={handleSavedBlockSelect}
+        onClose={closeSavedBlockPopup}
       />
     </div>
   );

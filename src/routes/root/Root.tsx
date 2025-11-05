@@ -75,10 +75,19 @@ import Tabs from "./Tabs";
 import { TabIcon, TabUri } from "@/state/store/ui_state";
 import * as commands from "@/lib/workspaces/commands";
 import FeedbackModal from "./FeedbackModal";
+import { getGlobalOptions } from "@/lib/global_options";
+import SaveBlockModal from "./SaveBlockModal";
+import SavedBlock from "@/state/runbooks/saved_block";
+import { uuidv7 } from "uuidv7";
+import DesktopImportModal from "./DesktopImportModal";
+
+const globalOptions = getGlobalOptions();
+const UPDATE_CHECK_INTERVAL = globalOptions.channel === "edge" ? 1000 * 60 * 5 : 1000 * 60 * 60;
 
 const Onboarding = React.lazy(() => import("@/components/Onboarding/Onboarding"));
 const UpdateNotifier = React.lazy(() => import("./UpdateNotifier"));
 const CommandMenu = React.lazy(() => import("@/components/CommandMenu/CommandMenu"));
+const CommandPalette = React.lazy(() => import("@/components/CommandPalette/CommandPalette"));
 const DialogManager = React.lazy(() => import("@/components/Dialogs/DialogManager"));
 const DesktopConnect = React.lazy(() => import("@/components/DesktopConnect/DesktopConnect"));
 const DeleteRunbookModal = React.lazy(() => import("./DeleteRunbookModal"));
@@ -122,6 +131,8 @@ function App() {
   const refreshRunbooks = useStore((state: AtuinState) => state.refreshRunbooks);
   const currentWorkspaceId = useStore((state: AtuinState) => state.currentWorkspaceId);
   const setCurrentWorkspaceId = useStore((state: AtuinState) => state.setCurrentWorkspaceId);
+  const openInDesktopImport = useStore((state: AtuinState) => state.openInDesktopImport);
+  const setOpenInDesktopImport = useStore((state: AtuinState) => state.setOpenInDesktopImport);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showInviteFriends, setShowInviteFriends] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
@@ -142,8 +153,13 @@ function App() {
   const user = useStore((state: AtuinState) => state.user);
   const isLoggedIn = useStore((state: AtuinState) => state.isLoggedIn);
   const showDesktopConnect = useStore((state: AtuinState) => state.proposedDesktopConnectUser);
+  const savingBlock = useStore((state: AtuinState) => state.savingBlock);
+  const clearSavingBlock = useStore((state: AtuinState) => state.clearSavingBlock);
 
-  const [showNewWorkspaceDialog, setShowNewWorkspaceDialog] = useState(false);
+  const [showNewWorkspaceDialog, setShowNewWorkspaceDialog] = useStore((state: AtuinState) => [
+    state.newWorkspaceDialogOpen,
+    state.setNewWorkspaceDialogOpen,
+  ]);
 
   const listRef = useRef<ListApi>(null);
 
@@ -317,7 +333,8 @@ function App() {
   });
 
   useTauriEvent("new-runbook", async () => {
-    handleStartCreateRunbook(currentWorkspaceId, null);
+    const workspaceId = useStore.getState().currentWorkspaceId;
+    handleStartCreateRunbook(workspaceId, null);
   });
 
   useTauriEvent("new-workspace", async () => {
@@ -330,7 +347,7 @@ function App() {
         await checkForAppUpdates(false);
       })();
 
-      setTimeout(check, 1000 * 60 * 60);
+      setTimeout(check, UPDATE_CHECK_INTERVAL);
     };
 
     check();
@@ -468,6 +485,32 @@ function App() {
   // ) {
   //   //
   // }
+
+  async function handleSaveBlock(name: string, block: any) {
+    clearSavingBlock();
+
+    let savedBlock = await SavedBlock.getBy({ name });
+    if (savedBlock) {
+      savedBlock.set("content", block);
+    } else {
+      savedBlock = new SavedBlock({
+        id: uuidv7(),
+        name,
+        content: block,
+      });
+    }
+
+    try {
+      await savedBlock.save();
+    } catch (err) {
+      await new DialogBuilder()
+        .title("Failed to save block")
+        .icon("error")
+        .message("Failed to save block")
+        .action({ label: "OK", value: "ok", variant: "flat" })
+        .build();
+    }
+  }
 
   async function handleMoveItemsToWorkspace(
     items: string[],
@@ -904,6 +947,7 @@ function App() {
         }}
       >
         <CommandMenu index={runbookIndex} />
+        <CommandPalette />
         <RunbookSearchIndex index={runbookIndex} />
         <UpdateNotifier />
         <>
@@ -1153,6 +1197,21 @@ function App() {
             runbookId={runbookIdToDelete}
             onClose={() => setRunbookIdToDelete(null)}
             doDeleteRunbook={doDeleteRunbook}
+          />
+        )}
+        {savingBlock.isSome() && (
+          <SaveBlockModal
+            block={savingBlock.unwrap()}
+            onClose={clearSavingBlock}
+            doSaveBlock={handleSaveBlock}
+          />
+        )}
+        {openInDesktopImport && (
+          <DesktopImportModal
+            runbookId={openInDesktopImport.id}
+            tag={openInDesktopImport.tag}
+            onClose={() => setOpenInDesktopImport(null)}
+            activateRunbook={navigateToRunbook}
           />
         )}
       </RunbookContext.Provider>

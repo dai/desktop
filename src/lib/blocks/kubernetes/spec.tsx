@@ -4,6 +4,7 @@ import { createReactBlockSpec } from "@blocknote/react";
 import { KubernetesComponent } from "./component";
 import track_event from "@/tracking";
 import { Container } from "lucide-react";
+import { Settings } from "@/state/settings";
 
 export default createReactBlockSpec(
     KUBERNETES_BLOCK_SCHEMA,
@@ -118,20 +119,23 @@ export const insertKubernetes = (editor: any) => ({
     let kubernetesBlocks = editor.document.filter((block: any) => block.type === "kubernetes-get");
     let name = `Kubernetes Get ${kubernetesBlocks.length + 1}`;
 
-    editor.insertBlocks(
-      [
-        {
-          type: "kubernetes-get",
-          props: {
-            name,
-            command: "kubectl get pods -o json",
-            mode: "preset",
+    Settings.scriptShell().then((shell) => {
+      editor.insertBlocks(
+        [
+          {
+            type: "kubernetes-get",
+            props: {
+              name,
+              command: "kubectl get pods -o json",
+              mode: "preset",
+              interpreter: shell || "zsh",
+            },
           },
-        },
-      ],
-      editor.getTextCursorPosition().block.id,
-      "before",
-    );
+        ],
+        editor.getTextCursorPosition().block.id,
+        "before",
+      );
+    });
   },
   icon: <Container size={18} />,
   aliases: ["kubernetes", "kubernetes-get", "k8s", "kubectl", "pods", "get"],
