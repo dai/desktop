@@ -24,6 +24,14 @@ import RunbookIdContext from "@/context/runbook_id_context";
 import { invoke } from "@tauri-apps/api/core";
 import RunbookSynchronizer from "@/lib/sync/runbook_synchronizer";
 import RunbookControls from "./RunbookControls";
+import {
+  DocumentBridge,
+  DocumentBridgeContext,
+  useBlockContext,
+} from "@/lib/hooks/useDocumentBridge";
+import DebugWindow from "@/lib/dev/DebugWindow";
+import { useSerialExecution } from "@/lib/hooks/useSerialExecution";
+import { Button, Spinner } from "@heroui/react";
 
 const Editor = React.lazy(() => import("@/components/runbooks/editor/Editor"));
 const Topbar = React.lazy(() => import("@/components/runbooks/TopBar/TopBar"));
@@ -46,22 +54,25 @@ export default function Runbooks() {
   const refreshRunbooks = useStore((store) => store.refreshRunbooks);
   const getLastTagForRunbook = useStore((store) => store.getLastTagForRunbook);
   const setLastTagForRunbook = useStore((store) => store.selectTag);
-  const { data: currentRunbook, isLoading: currentRunbookLoading } = useQuery(
-    runbookById(runbookId),
-  );
+  const {
+    data: currentRunbook,
+    isLoading: currentRunbookLoading,
+    isFetching: isFetchingRunbook,
+    isError: isErrorFetchingRunbook,
+  } = useQuery(runbookById(runbookId));
   const { data: runbookWorkspace } = useQuery(workspaceById(currentRunbook?.workspaceId || null));
   const lastRunbookRef = useMemory(currentRunbook);
   const [presences, setPresences] = useState<PresenceUserInfo[]>([]);
   const [runbookEditor, setRunbookEditor] = useState<RunbookEditor | null>(null);
   const lastRunbookEditor = useRef<RunbookEditor | null>(runbookEditor);
-  const serialExecution = useStore((store) => store.serialExecution);
-  const stopSerialExecution = useStore((store) => store.stopSerialExecution);
-  const { setTitle, setBadge, tab } = useContext(TabsContext);
+  const serialExecution = useSerialExecution(runbookId);
+  const { tab, ...tabsApi } = useContext(TabsContext);
   const registerTabOnClose = useStore((store) => store.registerTabOnClose);
   const setCurrentWorkspaceId = useStore((store) => store.setCurrentWorkspaceId);
   const ptys = usePtyStore((state) => state.ptys);
   const activePtyCount = Object.values(ptys).filter((pty) => pty.runbook === runbookId).length;
 
+  const [documentOpened, setDocumentOpened] = useState(false);
   const [syncingRunbook, setSyncingRunbook] = useState(false);
   const [failedToSyncRunbook, setFailedToSyncRunbook] = useState(false);
   // Key used to re-render editor when making major changes to runbook
@@ -77,9 +88,16 @@ export default function Runbooks() {
 
   useEffect(
     function syncRunbookIfNotSynced() {
+      if (!runbookId) return;
       if (currentRunbookLoading) return;
       if (currentRunbook) return;
-      if (!runbookId) return;
+
+      // If this runbook is in an online workspace and doesn't exist in the local database
+      // (due to background sync being off), we need to sync it. However, we don't know yet
+      // if the runbook is in an online workspace or not, as the offline workspace
+      // manager may take some time to return the runbook - but we don't want to wait until
+      // the offline workspace manager times out before we decide this must be an online runbook.
+      // So, we'll attempt to sync as soon as `isPending` is false for the runbook query.
 
       (async function syncRunbook() {
         setSyncingRunbook(true);
@@ -93,10 +111,15 @@ export default function Runbooks() {
             // If the runbook wasn't synced when this tab was loaded,
             // we need to set the workspace ID.
             setCurrentWorkspaceId(runbook.workspaceId);
+          } else {
+            throw new Error(`Runbook ${runbookId} not found after sync`);
           }
         } catch (err) {
           setFailedToSyncRunbook(true);
-          console.error("Error syncing runbook", err);
+          console.warn(
+            "Error syncing runbook; this could be normal if the runbook is offline",
+            err,
+          );
         } finally {
           setSyncingRunbook(false);
         }
@@ -105,15 +128,35 @@ export default function Runbooks() {
     [currentRunbookLoading, currentRunbook, runbookId, user],
   );
 
+  const [documentBridge, setDocumentBridge] = useState<DocumentBridge | null>(null);
+
+  useEffect(() => {
+    if (!currentRunbook?.id) {
+      return;
+    }
+    setDocumentBridge(new DocumentBridge(currentRunbook.id));
+  }, [currentRunbook?.id]);
+
+  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(null);
+  const onBlockFocus = (blockId: string) => {
+    console.log("block focus", blockId);
+    setFocusedBlockId(blockId);
+  };
+
+  useEffect(() => {
+    if (!runbookEditor) {
+      return;
+    }
+
+    return runbookEditor.onBlockFocus(onBlockFocus);
+  }, [runbookEditor]);
+
   useEffect(() => {
     if (!currentRunbook) {
       return;
     }
-    if (activePtyCount > 0) {
-      setBadge(String(activePtyCount));
-    } else {
-      setBadge(null);
-    }
+
+    tabsApi.setPtyCount(activePtyCount);
   }, [activePtyCount, currentRunbook]);
 
   useEffect(() => {
@@ -122,9 +165,7 @@ export default function Runbooks() {
     }
 
     return registerTabOnClose(tab.id, async () => {
-      const serialExecution = useStore.getState().serialExecution;
-
-      if (serialExecution.includes(currentRunbook.id)) {
+      if (serialExecution.isRunning) {
         const answer = await new DialogBuilder()
           .title(`Cancel workflow execution?`)
           .icon("question")
@@ -144,13 +185,12 @@ export default function Runbooks() {
 
         if (answer === "ok") {
           try {
-            await invoke("workflow_stop", { id: currentRunbook.id });
+            serialExecution.stop();
           } catch (error) {
             console.error("Error stopping workflow", error);
             return false;
           }
           await timeoutPromise(250, undefined);
-          stopSerialExecution(currentRunbook.id);
           return true;
         } else {
           return false;
@@ -159,18 +199,31 @@ export default function Runbooks() {
 
       return true;
     });
-  }, [currentRunbook?.id, tab?.id]);
+  }, [currentRunbook?.id, tab?.id, serialExecution.isRunning]);
 
   useEffect(() => {
     if (currentRunbook) {
-      setTitle(currentRunbook.name);
+      tabsApi.setTitle(currentRunbook.name);
     }
   }, [currentRunbook?.name]);
 
-  useMarkRunbookRead(currentRunbook || null, refreshRunbooks);
+  useEffect(() => {
+    if (currentRunbook && documentBridge) {
+      invoke("open_document", {
+        documentId: currentRunbook.id,
+        document: currentRunbook.content ? JSON.parse(currentRunbook.content) : "[]",
+        documentBridge: documentBridge.channel,
+      })
+        .then(() => {
+          setDocumentOpened(true);
+        })
+        .catch((err) => {
+          console.error("Error opening document in runtime backend", err);
+        });
+    }
+  }, [currentRunbook?.id, documentBridge?.channel]);
 
-  const listenPtyBackend = usePtyStore((state) => state.listenBackend);
-  const unlistenPtyBackend = usePtyStore((state) => state.unlistenBackend);
+  useMarkRunbookRead(currentRunbook || null, refreshRunbooks);
 
   const queryClient = useQueryClient();
 
@@ -265,11 +318,6 @@ export default function Runbooks() {
       setSelectedTag(tags[0]?.value || null);
     }
   }, [selectedTag, snapshots, tags, snapshotsFetching]);
-
-  useEffect(() => {
-    listenPtyBackend();
-    return unlistenPtyBackend;
-  }, []);
 
   useEffect(() => {
     const workspaceManager = WorkspaceManager.getInstance();
@@ -375,7 +423,7 @@ export default function Runbooks() {
   }, [currentRunbook?.id]);
 
   function handleShowTagMenu() {
-    if (currentRunbook && serialExecution.includes(currentRunbook.id)) {
+    if (currentRunbook && serialExecution.isRunning) {
       new DialogBuilder()
         .title("Cannot switch tags")
         .message("You cannot switch tags while a runbook is executing a workflow.")
@@ -434,6 +482,8 @@ export default function Runbooks() {
   const hasNoTags = tags.length == 0;
 
   const readyToRender =
+    documentBridge &&
+    documentOpened &&
     runbookEditor &&
     (selectedTag == "latest" ||
       (currentSnapshot && selectedTag == currentSnapshot.tag) ||
@@ -441,75 +491,93 @@ export default function Runbooks() {
 
   return (
     <RunbookIdContext.Provider value={currentRunbook?.id || null}>
-      <div className="flex !w-full !max-w-full flex-row overflow-hidden h-full">
-        {currentRunbook && readyToRender && (
-          <div className="flex w-full max-w-full overflow-hidden flex-col">
-            <Topbar
-              runbook={currentRunbook}
-              remoteRunbook={remoteRunbook || undefined}
-              tags={tags}
-              presences={presences}
-              showTagMenu={showTagMenu}
-              onOpenTagMenu={handleShowTagMenu}
-              onCloseTagMenu={() => setShowTagMenu(false)}
-              currentTag={selectedTag}
-              onSelectTag={handleSelectTag}
-              canEditTags={canEditTags}
-              canInviteCollaborators={!!canInviteCollabs}
-              onCreateTag={handleCreateTag}
-              onDeleteTag={handleDeleteTag}
-              onShareToHub={handleSharedToHub}
-              onDeleteFromHub={handleDeletedFromHub}
-              onToggleSettings={() => setShowSettings((show) => !show)}
-              isSettingsOpen={showSettings}
-            />
-            {showSettings && runbookWorkspace && (
-              <RunbookControls
+      <DocumentBridgeContext.Provider value={documentBridge}>
+        <div className="flex !w-full !max-w-full flex-row overflow-hidden h-full">
+          {runbookId && focusedBlockId && (
+            <BlockContextDebug runbookId={runbookId} blockId={focusedBlockId} />
+          )}
+          {currentRunbook && readyToRender && (
+            <div className="flex w-full max-w-full overflow-hidden flex-col">
+              <Topbar
                 runbook={currentRunbook}
                 remoteRunbook={remoteRunbook || undefined}
-                isOrgOwned={runbookWorkspace.isOrgOwned()}
-                isOfflineRunbook={
-                  !runbookWorkspace.isOnline() && !runbookWorkspace.isLegacyHybrid()
-                }
-                onClose={() => setShowSettings(false)}
+                tags={tags}
+                presences={presences}
+                showTagMenu={showTagMenu}
+                onOpenTagMenu={handleShowTagMenu}
+                onCloseTagMenu={() => setShowTagMenu(false)}
+                currentTag={selectedTag}
+                onSelectTag={handleSelectTag}
+                canEditTags={canEditTags}
+                canInviteCollaborators={!!canInviteCollabs}
+                onCreateTag={handleCreateTag}
+                onDeleteTag={handleDeleteTag}
+                onShareToHub={handleSharedToHub}
+                onDeleteFromHub={handleDeletedFromHub}
+                onToggleSettings={() => setShowSettings((show) => !show)}
+                isSettingsOpen={showSettings}
               />
-            )}
-            <Sentry.ErrorBoundary showDialog={false}>
-              {!hasNoTags && (
-                <Editor
-                  key={editorKey ? "1" : "2"}
+              {showSettings && runbookWorkspace && (
+                <RunbookControls
                   runbook={currentRunbook}
-                  runbookEditor={runbookEditor}
-                  editable={editable && selectedTag == "latest"}
+                  remoteRunbook={remoteRunbook || undefined}
+                  isOrgOwned={runbookWorkspace.isOrgOwned()}
+                  isOfflineRunbook={
+                    !runbookWorkspace.isOnline() && !runbookWorkspace.isLegacyHybrid()
+                  }
+                  onClose={() => setShowSettings(false)}
                 />
               )}
-              {hasNoTags && (
-                <div className="flex align-middle justify-center flex-col h-screen w-full">
-                  <h1 className="text-center">This runbook has no published tags</h1>
-                </div>
-              )}
-            </Sentry.ErrorBoundary>
-          </div>
-        )}
+              <Sentry.ErrorBoundary showDialog={false}>
+                {!hasNoTags && (
+                  <Editor
+                    key={editorKey ? "1" : "2"}
+                    runbook={currentRunbook}
+                    runbookEditor={runbookEditor}
+                    editable={editable && selectedTag == "latest"}
+                  />
+                )}
+                {hasNoTags && (
+                  <div className="flex align-middle justify-center flex-col h-screen w-full">
+                    <h1 className="text-center">This runbook has no published tags</h1>
+                  </div>
+                )}
+              </Sentry.ErrorBoundary>
+            </div>
+          )}
 
-        {!currentRunbook && !syncingRunbook && !failedToSyncRunbook && (
-          <div className="flex align-middle justify-center flex-col h-screen w-full">
-            <h1 className="text-center">Select or create a runbook</h1>
-          </div>
-        )}
+          {!currentRunbook && failedToSyncRunbook && isErrorFetchingRunbook && (
+            <div className="flex align-middle justify-center flex-col h-screen w-full">
+              <h1 className="text-center">We were unable to load this runbook.</h1>
+              <Button
+                className="inline-block mx-auto"
+                onPress={() => {
+                  tabsApi.reloadTab();
+                }}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
 
-        {!currentRunbook && !syncingRunbook && failedToSyncRunbook && (
-          <div className="flex align-middle justify-center flex-col h-screen w-full">
-            <h1 className="text-center">We were unable to sync this runbook</h1>
-          </div>
-        )}
-
-        {!currentRunbook && syncingRunbook && (
-          <div className="flex align-middle justify-center flex-col h-screen w-full">
-            <h1 className="text-center">Runbook is syncing, please wait...</h1>
-          </div>
-        )}
-      </div>
+          {!currentRunbook && (syncingRunbook || isFetchingRunbook) && (
+            <div className="flex align-middle justify-center flex-col h-screen w-full">
+              <h1 className="text-center">Loading runbook, please wait...</h1>
+              <Spinner />
+            </div>
+          )}
+        </div>
+      </DocumentBridgeContext.Provider>
     </RunbookIdContext.Provider>
+  );
+}
+
+function BlockContextDebug({ runbookId, blockId }: { runbookId: string; blockId: string }) {
+  const blockContext = useBlockContext(blockId);
+
+  return (
+    <DebugWindow title="Block Context" id={`block-context-${runbookId}`}>
+      <pre>{JSON.stringify(blockContext, null, 2)}</pre>
+    </DebugWindow>
   );
 }

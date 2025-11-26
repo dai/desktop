@@ -16,6 +16,8 @@ export interface Tab {
   url: string;
   title: string;
   icon: TabIcon | null;
+  ptyCount: number;
+  badgeCount: number;
   badge: string | null;
 }
 
@@ -60,6 +62,7 @@ export interface AtuinUiState {
   lastSidebarDragInfo: { itemIds: string[]; sourceWorkspaceId: string } | undefined;
   didSidebarSetup: boolean;
   savingBlock: Option<any>;
+  copiedBlock: Option<any>;
 
   tabs: Tab[];
   currentTabId: string | null;
@@ -96,7 +99,9 @@ export interface AtuinUiState {
   moveTab: (id: string, index: number) => void;
   undoCloseTab: () => void;
   setTabTitle: (id: string, title: string) => void;
-  setTabBadge: (id: string, badge: string | null) => void;
+  setTabPtyCount: (id: string, ptyCount: number) => void;
+  incrementTabBadgeCount: (id: string, count: number) => void;
+  decrementTabBadgeCount: (id: string, count: number) => void;
   advanceActiveTab: (amount: number) => void;
   closeAllTabs: () => void;
   closeOtherTabs: (id: string) => void;
@@ -106,6 +111,8 @@ export interface AtuinUiState {
   registerTabOnClose: (id: string, callback: (tab: Tab) => Promise<boolean>) => void;
   setSavingBlock: (block: any) => void;
   clearSavingBlock: () => void;
+  setCopiedBlock: (block: any) => void;
+  clearCopiedBlock: () => void;
 
   setLightModeEditorTheme: (theme: string) => void;
   setDarkModeEditorTheme: (theme: string) => void;
@@ -162,6 +169,7 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   lastSidebarDragInfo: undefined,
   didSidebarSetup: false,
   savingBlock: None,
+  copiedBlock: None,
 
   tabs: [],
   currentTabId: null,
@@ -208,7 +216,15 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
       set(() => ({
         tabs: [
           ...tabsBefore,
-          { id, url, title: title || url, icon: icon || null, badge: null },
+          {
+            id,
+            url,
+            title: title || url,
+            icon: icon || null,
+            ptyCount: 0,
+            badgeCount: 0,
+            badge: null,
+          },
           ...tabsAfter,
         ],
         currentTabId: id,
@@ -303,11 +319,34 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
       set(() => ({ tabs: tabs }));
     }
   },
-  setTabBadge: (id: string, badge: string | null) => {
+
+  setTabPtyCount: (id: string, ptyCount: number) => {
     const tabs = get().tabs;
     const tab = tabs.find((tab) => tab.id === id);
     if (tab) {
-      tab.badge = badge;
+      console.log("setTabPtyCount", id, ptyCount);
+      tab.ptyCount = ptyCount;
+      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
+      console.log("setTabPtyCount", tab.badge);
+      set(() => ({ tabs: tabs }));
+    }
+  },
+
+  incrementTabBadgeCount: (id: string, count: number) => {
+    const tabs = get().tabs;
+    const tab = tabs.find((tab) => tab.id === id);
+    if (tab) {
+      tab.badgeCount = tab.badgeCount + count;
+      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
+      set(() => ({ tabs: tabs }));
+    }
+  },
+  decrementTabBadgeCount: (id: string, count: number) => {
+    const tabs = get().tabs;
+    const tab = tabs.find((tab) => tab.id === id);
+    if (tab) {
+      tab.badgeCount = tab.badgeCount - count;
+      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
       set(() => ({ tabs: tabs }));
     }
   },
@@ -385,6 +424,8 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
 
   setSavingBlock: (block: any) => set(() => ({ savingBlock: Some(block) })),
   clearSavingBlock: () => set(() => ({ savingBlock: None })),
+  setCopiedBlock: (block: any) => set(() => ({ copiedBlock: Some(block) })),
+  clearCopiedBlock: () => set(() => ({ copiedBlock: None })),
 
   setLightModeEditorTheme: (theme: string) => set(() => ({ lightModeEditorTheme: theme })),
   setDarkModeEditorTheme: (theme: string) => set(() => ({ darkModeEditorTheme: theme })),

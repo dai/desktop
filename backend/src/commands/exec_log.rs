@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
-use crate::runtime::{blocks::Block, workflow::event::WorkflowEvent};
+use atuin_desktop_runtime::blocks::Block;
+use atuin_desktop_runtime::workflow::WorkflowEvent;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct ExecLogCompletedEvent {

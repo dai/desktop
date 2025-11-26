@@ -24,6 +24,7 @@ import {
   LinkIcon,
   BlocksIcon,
   MinusIcon,
+  ClipboardPasteIcon,
 } from "lucide-react";
 
 import { AIGeneratePopup } from "./AIGeneratePopup";
@@ -47,15 +48,13 @@ import Runbook from "@/state/runbooks/runbook";
 import { insertHttp } from "@/lib/blocks/http";
 import { uuidv7 } from "uuidv7";
 import { DuplicateBlockItem } from "./ui/DuplicateBlockItem";
+import { CopyBlockItem } from "./ui/CopyBlockItem";
 
 import { schema } from "./create_editor";
 import RunbookEditor from "@/lib/runbook_editor";
 import { useStore } from "@/state/store";
 import { usePromise } from "@/lib/utils";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import BlockBus from "@/lib/workflow/block_bus";
-import { invoke } from "@tauri-apps/api/core";
-import { convertBlocknoteToAtuin } from "@/lib/workflow/blocks/convert";
 import track_event from "@/tracking";
 import {
   saveScrollPosition,
@@ -219,6 +218,19 @@ const insertHorizontalRule = (editor: typeof schema.BlockNoteEditor) => ({
   group: "Content",
 });
 
+const insertPastedBlock = (editor: typeof schema.BlockNoteEditor, copiedBlock: any) => ({
+  title: "Paste Block",
+  subtext: "Paste the previously copied block",
+  onItemClick: () => {
+    track_event("runbooks.block.paste", { type: copiedBlock.type });
+
+    editor.insertBlocks([copiedBlock], editor.getTextCursorPosition().block.id, "before");
+  },
+  icon: <ClipboardPasteIcon size={18} />,
+  aliases: ["paste", "insert"],
+  group: "Content",
+});
+
 // AI Generate function
 const insertAIGenerate = (
   editor: any,
@@ -247,7 +259,7 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
   const colorMode = useStore((state) => state.functionalColorMode);
   const fontSize = useStore((state) => state.fontSize);
   const fontFamily = useStore((state) => state.fontFamily);
-  const serialExecuteRef = useRef<(() => void) | null>(null);
+  const copiedBlock = useStore((state) => state.copiedBlock);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [aiPopupVisible, setAiPopupVisible] = useState(false);
   const [aiPopupPosition, setAiPopupPosition] = useState({ x: 0, y: 0 });
@@ -398,12 +410,12 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
       if (!insertionAnchorRef.current) {
         insertionAnchorRef.current = editor.getTextCursorPosition().block.id;
       }
-      
+
       // Insert after the last inserted block, or after anchor if this is the first
       const insertAfterId = lastInsertedBlockRef.current || insertionAnchorRef.current;
-      
+
       const insertedBlocks = editor.insertBlocks([block], insertAfterId, "after");
-      
+
       // Track the last inserted block for the next one
       if (insertedBlocks && insertedBlocks.length > 0) {
         lastInsertedBlockRef.current = insertedBlocks[0].id;
@@ -417,36 +429,6 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
     lastInsertedBlockRef.current = null;
     closeAIPopup();
   }, [closeAIPopup]);
-
-  const serialExecuteCallback = useCallback(async () => {
-    if (!editor || !runbook) {
-      return;
-    }
-
-    let workflow = editor.document
-      .map(convertBlocknoteToAtuin)
-      .filter((block) => block !== null)
-      .map((block) => ({ type: block.typeName, ...block.object() }));
-    console.log(workflow);
-    await invoke("workflow_serial", { id: runbook.id, workflow });
-  }, [editor, runbook]);
-
-  useEffect(() => {
-    if (!editor || !runbook || serialExecuteRef.current) {
-      return;
-    }
-
-    serialExecuteRef.current = BlockBus.get().subscribeStartWorkflow(
-      runbook.id,
-      serialExecuteCallback,
-    );
-
-    return () => {
-      if (serialExecuteRef.current) {
-        BlockBus.get().unsubscribeStartWorkflow(runbook.id, serialExecuteRef.current);
-      }
-    };
-  }, [editor, runbook]);
 
   // Add keyboard shortcuts
   useEffect(() => {
@@ -702,6 +684,9 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
                 insertRunbookLink(editor as any, showRunbookLinkPopup),
                 insertSavedBlock(editor as any, showSavedBlockPopup),
                 insertHorizontalRule(editor as any),
+                ...(copiedBlock.isSome()
+                  ? [insertPastedBlock(editor as any, copiedBlock.unwrap())]
+                  : []),
 
                 // Monitoring group
                 insertPrometheus(schema)(editor),
@@ -738,6 +723,7 @@ export default function Editor({ runbook, editable, runbookEditor }: EditorProps
                 <DragHandleMenu {...props}>
                   <DeleteBlockItem {...props} />
                   <DuplicateBlockItem {...props} />
+                  <CopyBlockItem {...props} />
                   <SaveBlockItem {...props} />
                 </DragHandleMenu>
               )}

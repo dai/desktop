@@ -8,6 +8,7 @@ use std::{env, fs};
 
 use tauri::path::BaseDirectory;
 use tauri::{http, App, AppHandle, Manager, RunEvent};
+use tauri_plugin_log::fern::colors::{Color, ColoredLevelConfig};
 use time::format_description::well_known::Rfc3339;
 
 mod blocks;
@@ -19,10 +20,8 @@ mod install;
 mod kv;
 mod main_window;
 mod menu;
-mod pty;
 mod run;
 mod runbooks;
-mod runtime;
 mod secret;
 mod shared_state;
 mod shellcheck;
@@ -31,6 +30,7 @@ mod state;
 mod stats;
 mod store;
 mod templates;
+mod util;
 mod workspaces;
 
 // If this works out ergonomically, we should move all the commands into a single module
@@ -42,6 +42,8 @@ use atuin_client::{history::HISTORY_TAG, record::sqlite_store::SqliteStore, reco
 use atuin_history::stats as atuin_stats;
 use db::{GlobalStats, HistoryDB, UIHistory};
 use dotfiles::aliases::aliases;
+
+use crate::menu::TabItem;
 
 #[derive(Debug, serde::Serialize)]
 struct HomeInfo {
@@ -340,6 +342,14 @@ async fn get_platform_info() -> Result<String, String> {
     Ok(base_os)
 }
 
+#[tauri::command]
+async fn update_window_menu_tabs(app: AppHandle, tabs: Vec<TabItem>) -> Result<(), String> {
+    let new_menu = menu::menu(&app, &tabs).map_err(|e| e.to_string())?;
+    let _ = app.set_menu(new_menu);
+
+    Ok(())
+}
+
 fn backup_databases(app: &App) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     // This seems like the wrong directory to use, but it's what the SQL plugin uses so ¯\_(ツ)_/¯
@@ -398,18 +408,61 @@ fn main() {
         None
     };
 
+    let colors_line = ColoredLevelConfig::new()
+        .error(Color::Red)
+        .warn(Color::Yellow)
+        .info(Color::BrightWhite)
+        .debug(Color::Blue)
+        .trace(Color::BrightBlack);
+
     let builder = tauri::Builder::default().plugin(
         tauri_plugin_log::Builder::new()
             .targets([
-                tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
                 tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                     file_name: None,
                 }),
             ])
-            .level(log::LevelFilter::Info)
-            .level_for("atuin_desktop", log::LevelFilter::Info)
+            .level(
+                std::env::var("RUST_LOG")
+                    .ok()
+                    .and_then(|level| level.parse().ok())
+                    .unwrap_or(log::LevelFilter::Info),
+            )
+            .level_for(
+                "atuin_desktop",
+                std::env::var("ATUIN_LOG")
+                    .or_else(|_| std::env::var("RUST_LOG"))
+                    .ok()
+                    .and_then(|level| level.parse().ok())
+                    .unwrap_or(log::LevelFilter::Info),
+            )
+            .level_for(
+                "atuin_desktop_runtime",
+                std::env::var("ATUIN_LOG")
+                    .or_else(|_| std::env::var("RUST_LOG"))
+                    .ok()
+                    .and_then(|level| level.parse().ok())
+                    .unwrap_or(log::LevelFilter::Info),
+            )
             .max_file_size(20_000_000)
             .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(4))
+            .with_colors(tauri_plugin_log::fern::colors::ColoredLevelConfig::default())
+            .format(move |out, message, record| {
+                out.finish(format_args!(
+                    "{color_reset}[{date}][{level}]{target}{color_line} {message}{color_reset}",
+                    color_reset = format_args!("\x1B[0m"),
+                    color_line = format_args!(
+                        "\x1B[{}m",
+                        colors_line.get_color(&record.level()).to_fg_str()
+                    ),
+                    date = humantime::format_rfc3339(std::time::SystemTime::now()),
+                    target =
+                        format_args!("\x1B[{}m[{}]", Color::White.to_fg_str(), record.target()),
+                    level = colors_line.color(record.level()),
+                    message = message
+                ));
+            })
             .build(),
     );
     let builder = if cfg!(debug_assertions) {
@@ -446,14 +499,9 @@ fn main() {
             cli_settings,
             get_app_version,
             get_platform_info,
-            run::pty::pty_open,
+            update_window_menu_tabs,
             run::pty::pty_write,
             run::pty::pty_resize,
-            run::pty::pty_kill,
-            run::pty::pty_list,
-            run::shell::shell_exec,
-            run::shell::shell_exec_sync,
-            run::shell::term_process,
             run::shell::check_binary_exists,
             install::install_cli,
             install::is_cli_installed,
@@ -481,13 +529,6 @@ fn main() {
             commands::exec_log::log_execution,
             commands::dependency::can_run,
             commands::pty_store::runbook_kill_all_ptys,
-            commands::ssh_pool::ssh_connect,
-            commands::ssh_pool::ssh_disconnect,
-            commands::ssh_pool::ssh_list_connections,
-            commands::ssh_pool::ssh_exec,
-            commands::ssh_pool::ssh_exec_cancel,
-            commands::ssh_pool::ssh_open_pty,
-            commands::ssh_pool::ssh_write_pty,
             commands::workflow::serial::workflow_serial,
             commands::workflow::serial::workflow_block_start_event,
             commands::workflow::serial::workflow_stop,
@@ -500,11 +541,18 @@ fn main() {
             commands::block_state::delete_block_local_state,
             commands::block_state::delete_block_local_state_all,
             commands::feedback::send_feedback,
-            commands::mysql::mysql_query,
-            commands::mysql::mysql_execute,
-            commands::kubernetes::kubernetes_get_execute,
             commands::blocks::execute_block,
             commands::blocks::cancel_block_execution,
+            commands::blocks::open_document,
+            commands::blocks::update_document,
+            commands::blocks::get_flattened_block_context,
+            commands::blocks::get_block_state,
+            commands::blocks::notify_block_kv_value_changed,
+            commands::blocks::reset_runbook_state,
+            commands::blocks::respond_to_block_prompt,
+            commands::blocks::remove_stored_context_for_document,
+            commands::blocks::start_serial_execution,
+            commands::blocks::stop_serial_execution,
             commands::events::subscribe_to_events,
             commands::updates::check_for_updates,
             commands::workspaces::copy_welcome_workspace,
@@ -555,7 +603,7 @@ fn main() {
                 .resolve("resources", BaseDirectory::Resource);
 
             if let Err(e) = resources_dir {
-                eprintln!("Failed to resolve resources directory: {}", e);
+                log::error!("Failed to resolve resources directory: {}", e);
                 return http::Response::builder()
                     .status(500)
                     .header(http::header::CONTENT_TYPE, "text/plain")
@@ -574,9 +622,24 @@ fn main() {
             }
         })
         .setup(|app| {
+            // Load login shell environment early in startup
+            // This is best-effort only and should never crash the app
+            #[cfg(unix)]
+            run_async_command(async {
+                match crate::util::load_login_shell_environment().await {
+                    Ok(()) => {
+                        log::info!("Successfully loaded login shell environment");
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to load login shell environment: {}", e);
+                    }
+                }
+            });
+
             backup_databases(app)?;
 
             let handle = app.handle();
+            menu::initialize_menu_handlers(handle);
 
             let app_path = app
                 .path()
@@ -607,7 +670,7 @@ fn main() {
                 apply_runbooks_migrations(&handle_clone).await.unwrap();
             });
 
-            handle.set_menu(menu::menu(handle).expect("Failed to build menu"))?;
+            handle.set_menu(menu::menu(handle, &[]).expect("Failed to build menu"))?;
 
             let handle_clone = handle.clone();
             tauri::async_runtime::spawn(async move {

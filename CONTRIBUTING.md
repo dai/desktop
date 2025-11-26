@@ -96,10 +96,10 @@ A global `app` object lives on the `window`. Items can be added to it via `DevCo
 
 ### Node.js runs out of memory running `pnpm tauri build`
 
-You can increase the memory limit by setting the `NODE_OPTIONS` environment variable to `--max-old-space-size=5120`. For example:
+You can increase the memory limit by setting the `NODE_OPTIONS` environment variable to `--max-old-space-size=6144`. For example:
 
 ```
-NODE_OPTIONS=--max-old-space-size=5120 pnpm tauri build
+NODE_OPTIONS=--max-old-space-size=6144 pnpm tauri build
 ```
 
 This repository contains an `.envrc` file that sets this for you if you use [direnv](https://direnv.net/).

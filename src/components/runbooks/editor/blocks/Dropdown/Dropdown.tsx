@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { ListFilterIcon, CheckIcon, ChevronsUpDownIcon, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,17 +17,13 @@ import { Badge } from "@/components/ui/badge";
 import { cn, exportPropMatter } from "@/lib/utils";
 import { createReactBlockSpec } from "@blocknote/react";
 
-import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "@/state/store";
 import track_event from "@/tracking";
-import { findAllParentsOfType, getCurrentDirectory } from "@/lib/blocks/exec.ts";
-import { setTemplateVar, templateString } from "@/state/templates";
 import CodeEditor, { TabAutoComplete } from "@/lib/blocks/common/CodeEditor/CodeEditor.tsx";
-import InterpreterSelector, {
-  buildInterpreterCommand,
-} from "@/lib/blocks/common/InterpreterSelector.tsx";
-import RunbookBus from "@/lib/app/runbook_bus";
-import { useCurrentRunbookId } from "@/context/runbook_id_context";
+import InterpreterSelector from "@/lib/blocks/common/InterpreterSelector.tsx";
+import { useBlockExecution, useBlockState } from "@/lib/hooks/useDocumentBridge";
+import isValidVarName from "../../utils/varNames";
+import { DropdownState } from "@/rs-bindings/DropdownState";
 
 // Helper to parse and display option nicely
 const parseOption = (option: string) => {
@@ -69,6 +65,7 @@ interface DropdownProps {
   interpreter: string;
   isEditable: boolean;
   editor: any;
+  dropdown: any;
 
   onNameUpdate: (name: string) => void;
   onOptionsUpdate: (type: OptionType, options: string) => void;
@@ -197,6 +194,7 @@ const VariableTab = ({
 };
 
 interface CommandTabProps {
+  blockId: string;
   options: string;
   onOptionsUpdate: (options: string) => void;
   interpreter: string;
@@ -205,6 +203,7 @@ interface CommandTabProps {
 }
 
 const CommandTab = ({
+  blockId,
   options,
   onOptionsUpdate,
   interpreter,
@@ -234,6 +233,7 @@ const CommandTab = ({
       <div className="min-h-[120px] border border-blue-200 dark:border-blue-800 rounded-md overflow-x-auto">
         <CodeEditor
           id="dropdown-command-editor"
+          blockId={blockId}
           code={options}
           isEditable={true}
           language={interpreter || "bash"}
@@ -248,8 +248,8 @@ const CommandTab = ({
 };
 
 const Dropdown = ({
-  editor,
   id,
+  dropdown,
   name = "",
   options = "",
   value = "",
@@ -263,192 +263,37 @@ const Dropdown = ({
   isEditable,
   onCodeMirrorFocus,
 }: DropdownProps) => {
-  const currentRunbookId = useCurrentRunbookId();
   const [selected, setSelected] = useState(value);
   const { isOpen, onOpen, onOpenChange } = useDisclosure();
   const [comboboxOpen, setComboboxOpen] = useState(false);
 
-  useEffect(() => {
-    // Only validate fixed options - variable options are handled separately
-    if (optionsType === "fixed") {
-      const parsedOptions = splitLines(options);
-      const validValues = parsedOptions.map((opt) => opt.value);
-
-      if (!validValues.includes(value)) {
-        onValueUpdate("");
-        setSelected("");
-      }
-    }
-  }, [value, options, optionsType, onValueUpdate]);
-
-  // Store variable options separately
-  const [variableOptions, setVariableOptions] = useState<{ label: string; value: string }[]>([]);
-  const [isLoadingCommand, setIsLoadingCommand] = useState(false);
-
-  // Create a split lines helper function outside the effect
-  const splitLines = (value: string) => {
-    let lines = value
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
-
-    // If no newlines found, try comma splitting
-    if (lines.length <= 1) {
-      lines = value.split(",");
-    }
-
-    const opts = lines.map(parseOption);
-
-    return opts;
-  };
-
-  // Function to fetch options - extracted for reuse
-  const fetchOptions = useCallback(async () => {
-    if (optionsType === "variable" && options && currentRunbookId) {
-      try {
-        let value = await invoke("get_template_var", {
-          runbook: currentRunbookId,
-          name: options,
-        });
-
-        if (typeof value === "string") {
-          setVariableOptions(splitLines(value));
-          return value;
-        } else {
-          setVariableOptions([]);
-          return "";
-        }
-      } catch (error) {
-        console.error("Failed to fetch variable:", error);
-        setVariableOptions([]);
-      }
-    } else if (optionsType === "command") {
-      setIsLoadingCommand(true);
-      try {
-        let cwd = await getCurrentDirectory(editor, id, currentRunbookId);
-        let vars = findAllParentsOfType(editor, id, "env");
-        let env: { [key: string]: string } = {};
-
-        // Get environment variables
-        for (var i = 0; i < vars.length; i++) {
-          let name = await templateString(
-            id,
-            vars[i].props.name,
-            editor.document,
-            currentRunbookId,
-          );
-          let value = await templateString(
-            id,
-            vars[i].props.value,
-            editor.document,
-            currentRunbookId,
-          );
-          env[name] = value;
-        }
-
-        // For command type, options contains the shell command to execute
-        const commandString = await templateString(id, options, editor.document, currentRunbookId);
-
-        // Build the interpreter command string using the selected interpreter
-        const interpreterCommand = buildInterpreterCommand(interpreter);
-
-        let value = await invoke<string>("shell_exec_sync", {
-          interpreter: interpreterCommand,
-          command: commandString,
-          env: env,
-          cwd: cwd,
-        });
-
-        if (value) {
-          setVariableOptions(splitLines(value));
-          return value;
-        } else {
-          setVariableOptions([]);
-          return "";
-        }
-      } catch (error) {
-        console.error("Command execution failed:", error);
-        setVariableOptions([]);
-      } finally {
-        setIsLoadingCommand(false);
-      }
-    }
-  }, [options, optionsType, interpreter, currentRunbookId, id]);
-
-  useEffect(() => {
-    if (!currentRunbookId) {
-      return;
-    }
-
-    const bus = RunbookBus.get(currentRunbookId);
-    return bus.onVariableChanged((changedName, _val) => {
-      if (changedName === options) {
-        fetchOptions().then((newValue) => {
-          if (newValue !== undefined) {
-            onValueUpdate(newValue);
-          }
-        });
-      }
-    });
-  }, [currentRunbookId, name, optionsType, fetchOptions]);
-
-  // Fetch options when dependencies change
-  useEffect(() => {
-    fetchOptions();
-  }, [fetchOptions]);
-
-  // We're handling refreshes with onOpenChange of the Select component
-  // No need for a separate effect listening to modal open state
-
-  // Compute options based on type
-  const renderOptions = useMemo(() => {
-    if (optionsType === "fixed") {
-      return splitLines(options);
-    } else if (optionsType === "variable" || optionsType === "command") {
-      return variableOptions;
-    }
-    return [];
-  }, [options, optionsType, variableOptions]);
-
-  useEffect(() => {
-    (async () => {
-      if (!currentRunbookId) {
-        return;
-      }
-
-      await setTemplateVar(currentRunbookId, name, selected);
-    })();
-  }, [selected]);
+  const dropdownState = useBlockState<DropdownState>(id);
+  const execution = useBlockExecution(id);
 
   const [hasNameError, setHasNameError] = useState(false);
 
   // Check for invalid variable name characters (only allow alphanumeric and underscore)
   useEffect(() => {
-    const validNamePattern = /^[a-zA-Z0-9_]*$/;
-    setHasNameError(!validNamePattern.test(name));
+    if (!isValidVarName(name)) {
+      setHasNameError(true);
+    } else {
+      setHasNameError(false);
+    }
   }, [name]);
 
-  const handleKeyChange = (e: React.FormEvent<HTMLInputElement>) => {
-    const newName = e.currentTarget.value;
+  useEffect(function fixMissingOptions() {
+    // We've seen cases where `options` is populated, but none of
+    // `fixedOptions`, `variableOptions` or `commandOptions` are.
+    // In these cases, `optionsType` is set. So, if we detect this scenario,
+    // check that `optionsType` is fixed and populate the missing options.
+    const { fixedOptions } = dropdown.props;
 
-    // If name is changing and we have a current runbook
-    if (name && name !== newName && currentRunbookId) {
-      // First, get the current value
-      invoke("get_template_var", {
-        runbook: currentRunbookId,
-        name: name,
-      })
-        .then((value: any) => {
-          if (value && newName) {
-            // Save under the new name
-            setTemplateVar(currentRunbookId, newName, value as string).catch(console.error);
-          }
-        })
-        .catch(console.error);
+    if (options !== "" && fixedOptions === "" && optionsType === "fixed") {
+      if (optionsType === "fixed") {
+        onOptionsUpdate(OptionType.FIXED, options);
+      }
     }
-
-    onNameUpdate(newName);
-  };
+  }, []);
 
   const optionsChangeHandler = useCallback(
     (type: OptionType) => (options: string) => onOptionsUpdate(type, options),
@@ -460,9 +305,19 @@ const Dropdown = ({
     [onOptionsTypeChange],
   );
 
+  const [executionReady, setExecutionReady] = useState(false);
+  useEffect(() => {
+    setTimeout(() => {
+      execution.execute();
+    }, 1);
+  }, [executionReady]);
+
   return (
     <>
-      <div className="flex flex-row items-center space-x-3 w-full bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-slate-800 dark:to-cyan-950 rounded-lg p-3 border border-blue-200 dark:border-blue-900 shadow-sm hover:shadow-md transition-all duration-200">
+      <div
+        ref={() => setExecutionReady(true)}
+        className="flex flex-row items-center space-x-3 w-full bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-slate-800 dark:to-cyan-950 rounded-lg p-3 border border-blue-200 dark:border-blue-900 shadow-sm hover:shadow-md transition-all duration-200"
+      >
         <div className="flex items-center">
           <Button
             size="sm"
@@ -478,7 +333,7 @@ const Dropdown = ({
           <Input
             placeholder="Template variable name"
             value={name}
-            onChange={handleKeyChange}
+            onChange={(e) => onNameUpdate(e.target.value)}
             style={{ fontFamily: "monospace" }}
             autoComplete="off"
             autoCapitalize="off"
@@ -498,8 +353,8 @@ const Dropdown = ({
             onOpenChange={(open) => {
               setComboboxOpen(open);
               // Refresh options when dropdown is opened
-              if (open && (optionsType === "variable" || optionsType === "command")) {
-                fetchOptions();
+              if (open) {
+                execution?.execute();
               }
             }}
           >
@@ -510,13 +365,17 @@ const Dropdown = ({
                 aria-expanded={comboboxOpen}
                 className="w-full justify-between"
               >
-                {isLoadingCommand ? (
+                {execution?.isRunning ? (
                   <div className="flex items-center">
                     <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600 mr-2"></div>
-                    {renderOptions.find((option) => option.value === selected)?.label}
+                    {
+                      dropdownState?.resolved?.options.find((option) => option.value === selected)
+                        ?.label
+                    }
                   </div>
                 ) : selected ? (
-                  renderOptions.find((option) => option.value === selected)?.label
+                  dropdownState?.resolved?.options.find((option) => option.value === selected)
+                    ?.label
                 ) : (
                   "Select option..."
                 )}
@@ -529,7 +388,7 @@ const Dropdown = ({
                 <CommandList>
                   <CommandEmpty>No option found.</CommandEmpty>
                   <CommandGroup>
-                    {renderOptions.map((option) => (
+                    {dropdownState?.resolved?.options.map((option) => (
                       <CommandItem
                         key={option.value}
                         value={option.value}
@@ -586,6 +445,7 @@ const Dropdown = ({
                     </TabsContent>
                     <TabsContent value="command" className="flex-1 overflow-auto">
                       <CommandTab
+                        blockId={id}
                         options={options}
                         onOptionsUpdate={optionsChangeHandler(OptionType.COMMAND)}
                         interpreter={interpreter}
@@ -693,6 +553,7 @@ export default createReactBlockSpec(
       return (
         <Dropdown
           editor={editor}
+          dropdown={block}
           id={block.id}
           name={block.props.name}
           options={block.props.options}

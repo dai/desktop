@@ -11,6 +11,7 @@ const handleDeepLink = async (
     return null;
   }
 
+  // Handle URLs like atuin://runbook/:runbookId?tag=:tag
   if (uri.host === "runbook") {
     const runbookId = uri.pathname.substring(1); // drop leading slash
     const tag = uri.searchParams.get("tag") || "latest";
@@ -27,6 +28,7 @@ const handleDeepLink = async (
       useStore.getState().setOpenInDesktopImport({ id: runbookId, tag });
     }
   } else if (uri.host === "register-token") {
+    // Handle URLs like atuin://register-token/:token
     const token = uri.pathname.substring(1); // drop leading slash
 
     try {

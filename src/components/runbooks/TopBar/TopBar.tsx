@@ -5,18 +5,25 @@ import ColorAvatar from "@/components/ColorAvatar";
 import { DateTime } from "luxon";
 import { addToast, Avatar, AvatarGroup, Button, Tooltip } from "@heroui/react";
 import { RemoteRunbook } from "@/state/models";
-import { BookTextIcon, CopyIcon, PencilOffIcon, SettingsIcon, TrashIcon } from "lucide-react";
+import {
+  BookTextIcon,
+  CopyIcon,
+  PencilOffIcon,
+  RefreshCcwIcon,
+  SettingsIcon,
+  TrashIcon,
+} from "lucide-react";
 import { PresenceUserInfo } from "@/lib/phoenix_provider";
 import { useQuery } from "@tanstack/react-query";
 import { workspaceById } from "@/lib/queries/workspaces";
-import { useStore } from "@/state/store";
-import BlockBus from "@/lib/workflow/block_bus";
-import { invoke } from "@tauri-apps/api/core";
 import track_event from "@/tracking";
 import PlayButton from "@/lib/blocks/common/PlayButton";
 import AtuinEnv from "@/atuin_env";
 import { open } from "@tauri-apps/plugin-shell";
 import { cn } from "@/lib/utils";
+import { resetRunbookState } from "@/lib/runtime";
+import { useSerialExecution } from "@/lib/hooks/useSerialExecution";
+import { useEffect, useRef } from "react";
 
 type TopbarProps = {
   runbook: Runbook;
@@ -46,10 +53,9 @@ function openHubRunbook(e: React.MouseEvent<HTMLAnchorElement>) {
 export default function Topbar(props: TopbarProps) {
   let runbook = props.runbook;
   let remoteRunbook = props.remoteRunbook;
-  let serialExecution = useStore((state) => state.serialExecution);
-  let startSerialExecution = useStore((state) => state.startSerialExecution);
-  let stopSerialExecution = useStore((state) => state.stopSerialExecution);
   let { data: workspace } = useQuery(workspaceById(runbook.workspaceId));
+
+  const serialExecution = useSerialExecution(runbook.id);
 
   let name: string;
   if (remoteRunbook) {
@@ -57,6 +63,47 @@ export default function Topbar(props: TopbarProps) {
   } else {
     name = runbook.name;
   }
+
+  let wasRunning = useRef(false);
+  useEffect(() => {
+    if (serialExecution.isRunning && wasRunning.current === false) {
+      wasRunning.current = true;
+    } else if (!serialExecution.isRunning && wasRunning.current === true) {
+      wasRunning.current = false;
+
+      if (serialExecution.isSuccess) {
+        addToast({
+          title: "Serial execution completed",
+          description: `Runbook "${name}" completed successfully`,
+          color: "success",
+          timeout: 5000,
+          shouldShowTimeoutProgress: true,
+        });
+      } else if (serialExecution.isError) {
+        addToast({
+          title: "Serial execution failed",
+          description: `Runbook "${name}" failed to complete`,
+          color: "danger",
+          timeout: 5000,
+          shouldShowTimeoutProgress: true,
+        });
+      } else if (serialExecution.isCancelled) {
+        addToast({
+          title: "Serial execution cancelled",
+          description: `Runbook "${name}" was cancelled`,
+          color: "warning",
+          timeout: 5000,
+          shouldShowTimeoutProgress: true,
+        });
+      }
+    }
+  }, [
+    serialExecution.isRunning,
+    serialExecution.isSuccess,
+    serialExecution.isError,
+    serialExecution.isCancelled,
+    serialExecution.error,
+  ]);
 
   function onSelectTag(tag: string) {
     props.onSelectTag(tag);
@@ -199,7 +246,18 @@ export default function Topbar(props: TopbarProps) {
             ))}
           </AvatarGroup>
         </div>
-        <Tooltip content="Toggle runbook settings" placement="left" showArrow>
+        <Tooltip content="Reset any runbook state changes from block executions" placement="bottom">
+          <Button
+            isIconOnly
+            variant="flat"
+            size="sm"
+            className="mt-1 ml-2"
+            onPress={() => resetRunbookState(props.runbook.id)}
+          >
+            <RefreshCcwIcon className="h-4 w-4" />
+          </Button>
+        </Tooltip>
+        <Tooltip content="Toggle runbook settings" placement="bottom">
           <Button
             isIconOnly
             variant="flat"
@@ -214,23 +272,16 @@ export default function Topbar(props: TopbarProps) {
         </Tooltip>
         <PlayButton
           className="mt-1 ml-2"
-          isRunning={serialExecution.includes(runbook.id)}
-          disabled={serialExecution.length > 0 && !serialExecution.includes(runbook.id)}
+          isRunning={serialExecution.isRunning}
           cancellable={true}
+          tooltip="Run this runbook in serial mode (top-to-bottom)"
+          tooltipPlacement="bottom"
           onPlay={() => {
             track_event("runbooks.serial.execute");
-            BlockBus.get().startWorkflow(runbook.id);
-            startSerialExecution(runbook.id);
-
-            const onStop = () => {
-              stopSerialExecution(runbook.id);
-              BlockBus.get().unsubscribeWorkflowFinished(runbook.id, onStop);
-            };
-
-            BlockBus.get().subscribeWorkflowFinished(runbook.id, onStop);
+            serialExecution.start();
           }}
           onStop={async () => {
-            await invoke("workflow_stop", { id: runbook.id });
+            serialExecution.stop();
           }}
         />
       </div>

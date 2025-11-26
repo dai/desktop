@@ -1,45 +1,49 @@
 // @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
 
-import { useMemo, useState, useEffect, useRef, useCallback } from "react";
+import { useMemo, useState, useEffect, useRef, useCallback, useContext } from "react";
 
 import { useStore } from "@/state/store.ts";
-import { addToast, Button, Input, Tooltip } from "@heroui/react";
-import { FileTerminalIcon, Eye, EyeOff, TriangleAlertIcon, ArrowDownToLineIcon, ArrowUpToLineIcon } from "lucide-react";
+import { Button, Input, Tooltip } from "@heroui/react";
+import {
+  FileTerminalIcon,
+  Eye,
+  EyeOff,
+  TriangleAlertIcon,
+  ArrowDownToLineIcon,
+  ArrowUpToLineIcon,
+} from "lucide-react";
 import EditableHeading from "@/components/EditableHeading/index.tsx";
 
-import { uuidv7 } from "uuidv7";
-import { listen, UnlistenFn } from "@tauri-apps/api/event";
-
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import "@xterm/xterm/css/xterm.css";
-import { findAllParentsOfType, findFirstParentOfType, getCurrentDirectory } from "@/lib/blocks/exec.ts";
-import { templateString } from "@/state/templates.ts";
 import { Command } from "@codemirror/view";
 import { ScriptBlock as ScriptBlockType } from "@/lib/workflow/blocks/script.ts";
 import { default as BlockType } from "@/lib/workflow/blocks/block.ts";
 import { convertBlocknoteToAtuin } from "@/lib/workflow/blocks/convert.ts";
 import { DependencySpec } from "@/lib/workflow/dependency.ts";
 import BlockBus from "@/lib/workflow/block_bus.ts";
-import {
-  useBlockBusRunSubscription,
-  useBlockBusStopSubscription,
-} from "@/lib/hooks/useBlockBus.ts";
-import SSHBus from "@/lib/buses/ssh.ts";
-import { useBlockDeleted } from "@/lib/buses/editor.ts";
-import { useBlockInserted } from "@/lib/buses/editor.ts";
 import track_event from "@/tracking";
 import { invoke } from "@tauri-apps/api/core";
 import { Settings } from "@/state/settings.ts";
 import PlayButton from "@/lib/blocks/common/PlayButton.tsx";
 import CodeEditor, { TabAutoComplete } from "@/lib/blocks/common/CodeEditor/CodeEditor.tsx";
 import Block from "@/lib/blocks/common/Block.tsx";
-import InterpreterSelector, { buildInterpreterCommand, supportedShells } from "@/lib/blocks/common/InterpreterSelector.tsx";
+import InterpreterSelector, { supportedShells } from "@/lib/blocks/common/InterpreterSelector.tsx";
 import { exportPropMatter, cn } from "@/lib/utils";
-import { useCurrentRunbookId } from "@/context/runbook_id_context";
 import { useBlockLocalState } from "@/lib/hooks/useBlockLocalState";
+import {
+  GenericBlockOutput,
+  useBlockContext,
+  useBlockExecution,
+  useBlockOutput,
+  useBlockStart,
+  useBlockStop,
+} from "@/lib/hooks/useDocumentBridge";
+import Xterm, { XtermHandle, calculateRowHeight } from "@/components/runbooks/editor/components/Xterm";
+import ResizeHandle from "@/components/common/ResizeHandle";
+import { TabsContext } from "@/routes/root/Tabs";
+
+const MIN_SCRIPT_TERMINAL_ROWS = 5;
+const MAX_SCRIPT_TERMINAL_ROWS = 40;
 
 interface ScriptBlockProps {
   onChange: (val: string) => void;
@@ -52,9 +56,12 @@ interface ScriptBlockProps {
   setOutputVisible: (visible: boolean) => void;
   setDependency: (dependency: DependencySpec) => void;
   onCodeMirrorFocus?: () => void;
-  
+
   collapseCode: boolean;
   setCollapseCode: (collapse: boolean) => void;
+
+  terminalRows: number;
+  setTerminalRows: (rows: number) => void;
 
   script: ScriptBlockType;
 }
@@ -74,15 +81,29 @@ const ScriptBlock = ({
   onCodeMirrorFocus,
   collapseCode,
   setCollapseCode,
+  terminalRows,
+  setTerminalRows,
 }: ScriptBlockProps) => {
-  const [isRunning, setIsRunning] = useState<boolean>(false);
   const [hasRun, setHasRun] = useState<boolean>(false);
-  const [terminal, setTerminal] = useState<Terminal | null>(null);
-  const [fitAddon, setFitAddon] = useState<FitAddon | null>(null);
-  const [pid, setPid] = useState<number | null>(null);
+  const xtermRef = useRef<XtermHandle>(null);
   // Track available shells
   const [availableShells, setAvailableShells] = useState<Record<string, boolean>>({});
 
+  // Terminal dimensions - rowHeight for resize snapping, actualHeight for precise container sizing
+  const [rowHeight, setRowHeight] = useState(() => calculateRowHeight(Settings.DEFAULT_FONT_SIZE));
+  const [actualTerminalHeight, setActualTerminalHeight] = useState<number | null>(null);
+
+  // Load font size setting on mount for initial estimate
+  useEffect(() => {
+    Settings.terminalFontSize().then((fontSize) => {
+      setRowHeight(calculateRowHeight(fontSize || Settings.DEFAULT_FONT_SIZE));
+    });
+  }, []);
+
+  // Preview height during resize drag (null when not dragging)
+  const [previewHeight, setPreviewHeight] = useState<number | null>(null);
+  // Use actual rendered height when available, fall back to calculated estimate
+  const effectiveHeight = previewHeight ?? actualTerminalHeight ?? terminalRows * rowHeight;
 
   // Check if selected shell is missing
   const shellMissing = useMemo(() => {
@@ -93,46 +114,51 @@ const ScriptBlock = ({
     return script.interpreter in availableShells && !availableShells[script.interpreter];
   }, [script.interpreter, availableShells]);
 
+  const { incrementBadge, decrementBadge } = useContext(TabsContext);
   const colorMode = useStore((state) => state.functionalColorMode);
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const currentRunbookId = useCurrentRunbookId();
   const [parentBlock, setParentBlock] = useState<BlockType | null>(null);
-  const channelRef = useRef<string | null>(null);
   const elementRef = useRef<HTMLDivElement>(null);
-  const unlisten = useRef<UnlistenFn | null>(null);
-  const tauriUnlisten = useRef<UnlistenFn | null>(null);
   const lightModeEditorTheme = useStore((state) => state.lightModeEditorTheme);
   const darkModeEditorTheme = useStore((state) => state.darkModeEditorTheme);
   const theme = useMemo(() => {
     return colorMode === "dark" ? darkModeEditorTheme : lightModeEditorTheme;
   }, [colorMode, lightModeEditorTheme, darkModeEditorTheme]);
 
-  const [sshParent, setSshParent] = useState<any | null>(null);
+  const blockExecution = useBlockExecution(script.id);
+  const blockContext = useBlockContext(script.id);
+  const sshParent = blockContext.sshHost;
 
-  const updateSshParent = useCallback(() => {
-    let host = findFirstParentOfType(editor, script.id, ["ssh-connect", "host-select"]);
-    if (host?.type === "ssh-connect") {
-      setSshParent(host);
-    } else {
-      setSshParent(null);
+  const onBlockOutput = useCallback(async (output: GenericBlockOutput<void>) => {
+    if (output.stdout) {
+      xtermRef.current?.write(output.stdout);
     }
-  }, [editor, script.id]);
+    if (output.binary) {
+      xtermRef.current?.write(new Uint8Array(output.binary));
+    }
+    if (output.stderr) {
+      xtermRef.current?.write(output.stderr);
+    }
+  }, []);
 
-  useEffect(updateSshParent, []);
-
-  useBlockInserted("ssh-connect", updateSshParent);
-  useBlockInserted("host-select", updateSshParent);
-  useBlockDeleted("ssh-connect", updateSshParent);
-  useBlockDeleted("host-select", updateSshParent);
+  useBlockOutput<void>(script.id, onBlockOutput);
+  useBlockStart(script.id, () => {
+    setHasRun(true);
+    xtermRef.current?.clear();
+    incrementBadge(1);
+  });
+  useBlockStop(script.id, () => {
+    decrementBadge(1);
+  });
 
   // Class name for SSH indicator styling based on connection status
   const blockBorderClass = useMemo(() => {
     // Check output variable name first
-    const hasOutputVarError = script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable);
+    const hasOutputVarError =
+      script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable);
     if (hasOutputVarError) {
       return "border-1 border-red-400 shadow-[0_0_10px_rgba(239,68,68,0.4)] rounded-lg transition-all duration-300";
     }
-    
+
     if (shellMissing) {
       return "border-1 border-red-400 shadow-[0_0_10px_rgba(239,68,68,0.4)] rounded-lg transition-all duration-300";
     }
@@ -158,10 +184,6 @@ const ScriptBlock = ({
     }
     return null;
   }, [shellMissing, script.interpreter]);
-
-  let interpreterCommand = useMemo(() => {
-    return buildInterpreterCommand(script.interpreter, sshParent !== null);
-  }, [script.interpreter, sshParent]);
 
   // Check which shells are installed
   useEffect(() => {
@@ -203,51 +225,6 @@ const ScriptBlock = ({
     checkShellsAvailable();
   }, [supportedShells]);
 
-  // Initialize terminal lazily when needed
-  const initializeTerminal = useCallback(async () => {
-    if (terminal || !script.outputVisible) return terminal;
-
-    const term = new Terminal({
-      fontFamily: "FiraCode, monospace",
-      fontSize: 14,
-      convertEol: true,
-    });
-
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-
-    // Add WebGL support if enabled in settings
-    const useWebGL = await Settings.terminalGL();
-    if (useWebGL) {
-      try {
-        const webglAddon = new WebglAddon();
-        term.loadAddon(webglAddon);
-      } catch (e) {
-        console.warn("WebGL addon failed to load", e);
-      }
-    }
-
-    setTerminal(term);
-    setFitAddon(fit);
-
-    return term;
-  }, [terminal, script.outputVisible]);
-
-  // Handle terminal attachment
-  useEffect(() => {
-    if (!terminal || !terminalRef.current || !script.outputVisible) return;
-
-    terminal.open(terminalRef.current);
-    fitAddon?.fit();
-
-    const handleResize = () => fitAddon?.fit();
-    window.addEventListener("resize", handleResize);
-
-    return () => {
-      window.removeEventListener("resize", handleResize);
-    };
-  }, [terminal, fitAddon, script.outputVisible]);
-
   // handle dependency change
   useEffect(() => {
     if (!script.dependency.parent) {
@@ -266,161 +243,21 @@ const ScriptBlock = ({
     }
   }, [script.dependency]);
 
-  // Clean up terminal when output becomes hidden
-  useEffect(() => {
-    if (!script.outputVisible && terminal) {
-      terminal.dispose();
-      setTerminal(null);
-      setFitAddon(null);
-    }
-  }, [script.outputVisible, terminal]);
-
   const handlePlay = useCallback(async () => {
-    if (isRunning || unlisten.current) return;
+    if (blockExecution.isRunning) return;
 
-    // Initialize terminal only when needed and output is visible
-    const currentTerminal = script.outputVisible ? await initializeTerminal() : null;
-    if (script.outputVisible && !currentTerminal) return;
-
-    setIsRunning(true);
-    setHasRun(true);
-    currentTerminal?.clear();
-
-    const channel = uuidv7();
-    channelRef.current = channel;
-
-    unlisten.current = await listen(channel, (event) => {
-      currentTerminal?.write(event.payload + "\r\n");
-    });
-
-    let cwd = await getCurrentDirectory(editor, script.id, currentRunbookId);
-    let connectionBlock = findFirstParentOfType(editor, script.id, ["ssh-connect", "host-select"]);
-
-    let vars = findAllParentsOfType(editor, script.id, "env");
-    let env: { [key: string]: string } = {};
-
-    for (var i = 0; i < vars.length; i++) {
-      let name = await templateString(
-        script.id,
-        vars[i].props.name,
-        editor.document,
-        currentRunbookId,
-      );
-      let value = await templateString(
-        script.id,
-        vars[i].props.value,
-        editor.document,
-        currentRunbookId,
-      );
-      env[name] = value;
-    }
-
-    let command = await templateString(script.id, script.code, editor.document, currentRunbookId);
-
-    if (elementRef.current) {
-      elementRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-
-    if (connectionBlock && connectionBlock.type === "ssh-connect") {
-      try {
-        // Parse user@host format, handle cases where username is not provided
-        let username, host;
-        if (connectionBlock.props.userHost.includes("@")) {
-          [username, host] = connectionBlock.props.userHost.split("@");
-        } else {
-          username = null;
-          host = connectionBlock.props.userHost;
-        }
-
-        tauriUnlisten.current = await listen("ssh_exec_finished:" + channel, async () => {
-          onStop();
-        });
-
-        await invoke<string>("ssh_exec", {
-          host: host,
-          username: username,
-          command: command,
-          interpreter: interpreterCommand,
-          channel: channel,
-        });
-        SSHBus.get().updateConnectionStatus(connectionBlock.props.userHost, "success");
-      } catch (error) {
-        console.error("SSH connection failed:", error);
-        currentTerminal?.write("SSH connection failed\r\n");
-        addToast({
-          title: `ssh ${connectionBlock.props.userHost}`,
-          description: `${error}`,
-          color: "danger",
-        });
-        SSHBus.get().updateConnectionStatus(connectionBlock.props.userHost, "error");
-        onStop();
-      }
-
-      return;
-    }
-
-    let pid = await invoke<number>("shell_exec", {
-      channel: channel,
-      command: command,
-      interpreter: interpreterCommand,
-      props: {
-        runbook: currentRunbookId,
-        env: env,
-        cwd: cwd,
-        block: {
-          type: "script",
-          ...script.object(),
-        },
-      },
-    });
-
-    setPid(pid);
-
-    tauriUnlisten.current = await listen("shell_exec_finished:" + pid, async () => {
-      onStop();
-    });
-  }, [script, initializeTerminal, editor.document]);
-
-  const onStop = useCallback(async () => {
-    unlisten.current?.();
-    tauriUnlisten.current?.();
-
-    unlisten.current = null;
-    tauriUnlisten.current = null;
-
-    setIsRunning(false);
-    BlockBus.get().blockFinished(script);
-  }, [pid]);
-
-  const handleStop = async () => {
-    // Check for SSH block or Host block, prioritizing SSH if both exist
-    let connectionBlock = findFirstParentOfType(editor, script.id, ["ssh-connect", "host-select"]);
-
-    // Use SSH cancel for SSH blocks
-    if (connectionBlock && connectionBlock.type === "ssh-connect" && channelRef.current) {
-      await invoke("ssh_exec_cancel", { channel: channelRef.current });
-    } else {
-      // For Host blocks or no connection block, use local process termination
-      if (pid) {
-        await invoke("term_process", { pid: pid });
-      }
-    }
-    setIsRunning(false);
-    onStop();
-  };
-
-  useBlockBusRunSubscription(script.id, handlePlay);
-  useBlockBusStopSubscription(script.id, handleStop);
+    await blockExecution.execute();
+  }, [blockExecution]);
 
   const handleCmdEnter: Command = useCallback(() => {
-    if (!isRunning) {
+    if (!blockExecution.isRunning) {
       handlePlay();
     } else {
-      handleStop();
+      blockExecution.cancel();
     }
 
     return true;
-  }, [handlePlay, handleStop, isRunning]);
+  }, [handlePlay, blockExecution.cancel, blockExecution.isRunning]);
 
   // Border styling and validation handled in the blockBorderClass useMemo
   return (
@@ -433,35 +270,40 @@ const ScriptBlock = ({
       setName={setName}
       inlineHeader
       className={blockBorderClass}
+      bodyClassName="p-0 overflow-visible"
       hideChild={!script.outputVisible || !hasRun}
       topRightElement={topRightWarning}
       header={
         <>
           <div className="flex flex-row justify-between w-full">
             <h1 className="text-default-700 font-semibold">
-              {
-                <EditableHeading
-                  initialText={script.name || "Script"}
-                  onTextChange={(text) => setName(text)}
-                />
-              }
+              <EditableHeading
+                initialText={script.name || "Script"}
+                onTextChange={(text) => setName(text)}
+              />
             </h1>
 
             <div className="flex flex-row items-center gap-2" ref={elementRef}>
-                  <Input
-                    size="sm"
-                    variant="flat"
-                    className={`max-w-[250px] ${script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable) ? 'border-red-400 dark:border-red-400 focus:ring-red-500' : ''}`}
-                    placeholder="Output variable"
-                    autoComplete="off"
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    spellCheck="false"
-                    value={script.outputVariable}
-                    onValueChange={(val) => setOutputVariable(val)}
-                    isInvalid={!!script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable)}
-                    errorMessage={"Variable names can only contain letters, numbers, and underscores"}
-                  />
+              <Input
+                size="sm"
+                variant="flat"
+                className={`max-w-[250px] ${
+                  script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable)
+                    ? "border-red-400 dark:border-red-400 focus:ring-red-500"
+                    : ""
+                }`}
+                placeholder="Output variable"
+                autoComplete="off"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck="false"
+                value={script.outputVariable}
+                onValueChange={(val) => setOutputVariable(val)}
+                isInvalid={
+                  !!script.outputVariable && !/^[a-zA-Z0-9_]*$/.test(script.outputVariable)
+                }
+                errorMessage={"Variable names can only contain letters, numbers, and underscores"}
+              />
 
               <InterpreterSelector
                 interpreter={script.interpreter}
@@ -475,7 +317,6 @@ const ScriptBlock = ({
               >
                 <Button
                   onPress={() => {
-                    setHasRun(false);
                     setOutputVisible(!script.outputVisible);
                   }}
                   size="sm"
@@ -486,16 +327,18 @@ const ScriptBlock = ({
                 </Button>
               </Tooltip>
 
-              <Tooltip
-                content={collapseCode ? "Expand code" : "Collapse code"}
-              >
+              <Tooltip content={collapseCode ? "Expand code" : "Collapse code"}>
                 <Button
                   onPress={() => setCollapseCode(!collapseCode)}
                   size="sm"
                   variant="flat"
                   isIconOnly
                 >
-                  {collapseCode ? <ArrowDownToLineIcon size={20} /> : <ArrowUpToLineIcon size={20} />}
+                  {collapseCode ? (
+                    <ArrowDownToLineIcon size={20} />
+                  ) : (
+                    <ArrowUpToLineIcon size={20} />
+                  )}
                 </Button>
               </Tooltip>
             </div>
@@ -503,24 +346,34 @@ const ScriptBlock = ({
 
           <div className="flex flex-row gap-2 flex-grow w-full overflow-x-auto">
             <Tooltip
-              content={shellMissing ? `${script.interpreter} shell not found. This script may not run correctly.` : ""}
+              content={
+                shellMissing
+                  ? `${script.interpreter} shell not found. This script may not run correctly.`
+                  : ""
+              }
               isDisabled={!shellMissing}
               color="danger"
             >
               <div>
                 <PlayButton
-                  eventName="runbooks.block.execute" eventProps={{ type: "script" }}
+                  eventName="runbooks.block.execute"
+                  eventProps={{ type: "script" }}
                   onPlay={handlePlay}
-                  onStop={handleStop}
-                  isRunning={isRunning}
+                  onStop={blockExecution.cancel}
+                  isRunning={blockExecution.isRunning}
                   cancellable={true}
                 />
               </div>
             </Tooltip>
 
-            <div className={cn("min-w-0 flex-1 overflow-x-auto transition-all duration-300 ease-in-out relative", {
-              "max-h-10 overflow-hidden": collapseCode,
-            })}>
+            <div
+              className={cn(
+                "min-w-0 flex-1 overflow-x-auto transition-all duration-300 ease-in-out relative",
+                {
+                  "max-h-10 overflow-hidden": collapseCode,
+                },
+              )}
+            >
               <CodeEditor
                 id={script.id}
                 code={script.code}
@@ -545,10 +398,39 @@ const ScriptBlock = ({
         </>
       }
     >
-      {script.outputVisible && <div ref={terminalRef} className="min-h-[200px] w-full" />}
+      {hasRun && (
+        <>
+          <Xterm
+            ref={xtermRef}
+            className="w-full"
+            height={effectiveHeight}
+            onDimensionsReady={({ actualHeight, cellHeight }) => {
+              setActualTerminalHeight(actualHeight);
+              setRowHeight(cellHeight);
+            }}
+          />
+          <ResizeHandle
+            currentHeight={effectiveHeight}
+            onResizePreview={setPreviewHeight}
+            onResize={(newHeight) => {
+              setPreviewHeight(null);
+              setActualTerminalHeight(null); // Reset so we recalculate for new row count
+              const newRows = Math.round(newHeight / rowHeight);
+              setTerminalRows(
+                Math.max(MIN_SCRIPT_TERMINAL_ROWS, Math.min(MAX_SCRIPT_TERMINAL_ROWS, newRows)),
+              );
+            }}
+            snapIncrement={rowHeight}
+            minHeight={MIN_SCRIPT_TERMINAL_ROWS * rowHeight}
+            maxHeight={MAX_SCRIPT_TERMINAL_ROWS * rowHeight}
+          />
+        </>
+      )}
     </Block>
   );
 };
+
+export const DEFAULT_SCRIPT_TERMINAL_ROWS = 12;
 
 export default createReactBlockSpec(
   {
@@ -570,6 +452,9 @@ export default createReactBlockSpec(
       dependency: {
         default: "{}",
       },
+      terminalRows: {
+        default: DEFAULT_SCRIPT_TERMINAL_ROWS,
+      },
     },
     content: "none",
   },
@@ -590,7 +475,7 @@ export default createReactBlockSpec(
       const [collapseCode, setCollapseCode] = useBlockLocalState<boolean>(
         block.id,
         "collapsed",
-        false
+        false,
       );
 
       const handleCodeMirrorFocus = () => {
@@ -659,6 +544,12 @@ export default createReactBlockSpec(
         );
       };
 
+      const setTerminalRows = (rows: number) => {
+        editor.updateBlock(block, {
+          props: { ...block.props, terminalRows: rows },
+        });
+      };
+
       let dependency = DependencySpec.deserialize(block.props.dependency);
       let script = new ScriptBlockType(
         block.id,
@@ -684,6 +575,8 @@ export default createReactBlockSpec(
           onCodeMirrorFocus={handleCodeMirrorFocus}
           collapseCode={collapseCode}
           setCollapseCode={setCollapseCode}
+          terminalRows={block.props.terminalRows}
+          setTerminalRows={setTerminalRows}
         />
       );
     },

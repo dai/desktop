@@ -1,22 +1,112 @@
+use std::fmt::Display;
+
 use eyre::Result;
+use serde::Deserialize;
 use tauri::{
-    menu::{AboutMetadata, Menu, MenuItem, MenuItemBuilder, PredefinedMenuItem, Submenu},
+    menu::{
+        AboutMetadata, IsMenuItem, Menu, MenuItem, MenuItemBuilder, PredefinedMenuItem, Submenu,
+    },
     AppHandle, Emitter, Manager, Runtime,
 };
+
+struct IdWithNoColons(String);
+
+impl IdWithNoColons {
+    pub fn new(id: String) -> Result<Self> {
+        if id.contains(":") {
+            return Err(eyre::eyre!("ID cannot contain colons"));
+        }
+        Ok(Self(id))
+    }
+}
+
+impl Display for IdWithNoColons {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl TryFrom<String> for IdWithNoColons {
+    type Error = eyre::Error;
+    fn try_from(id: String) -> Result<Self> {
+        Self::new(id)
+    }
+}
+
+impl TryFrom<&str> for IdWithNoColons {
+    type Error = eyre::Error;
+    fn try_from(id: &str) -> Result<Self> {
+        Self::new(id.to_string())
+    }
+}
+
+pub(crate) fn initialize_menu_handlers<R: Runtime>(handle: &AppHandle<R>) {
+    handle.on_menu_event(move |app_handle, event| match event.id().0.as_str() {
+        "update-check" => {
+            app_handle
+                .emit("update-check", 0)
+                .expect("Failed to emit menu event");
+        }
+        "start-sync" => {
+            app_handle
+                .emit("start-sync", 0)
+                .expect("Failed to emit menu event");
+        }
+        "import-runbook" => {
+            app_handle
+                .emit("import-runbook", 0)
+                .expect("Failed to emit menu event");
+        }
+        "new-runbook" => {
+            app_handle
+                .emit("new-runbook", 0)
+                .expect("Failed to emit menu event");
+        }
+        "new-workspace" => {
+            app_handle
+                .emit("new-workspace", 0)
+                .expect("Failed to emit menu event");
+        }
+        "export-markdown" => {
+            app_handle
+                .emit("export-markdown", 0)
+                .expect("Failed to emit menu event");
+        }
+        "toggle-devtools" => {
+            let window = app_handle.get_webview_window("main").unwrap();
+            if window.is_devtools_open() {
+                window.close_devtools();
+            } else {
+                window.open_devtools();
+            }
+        }
+        other_id if other_id.starts_with("link-menu-item:") => {
+            let href = other_id.splitn(3, ":").nth(2);
+            if let Some(href) = href {
+                let _ = open::that(href);
+            } else {
+                log::warn!("Unknown menu event: {other_id}");
+            }
+        }
+        other_id if other_id.starts_with("window-tab-item:") => {
+            let url = other_id.split_once(":").map(|x| x.1);
+            if let Some(url) = url {
+                app_handle.emit("activate-tab", url).unwrap();
+            } else {
+                log::warn!("Unknown menu event: {other_id}");
+            }
+        }
+        other_id => {
+            log::warn!("Unknown menu event: {other_id}");
+        }
+    });
+}
 
 #[allow(dead_code)]
 fn update_check<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
     let update_check = MenuItemBuilder::new("Check for Updates")
         .id("update-check")
         .build(handle)?;
-
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "update-check" {
-            window
-                .emit("update-check", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
 
     Ok(update_check)
 }
@@ -27,14 +117,6 @@ fn start_sync<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .id("start-sync")
         .build(handle)?;
 
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "start-sync" {
-            window
-                .emit("start-sync", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
-
     Ok(start_sync)
 }
 
@@ -44,13 +126,6 @@ fn import_runbook<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .id("import-runbook")
         .build(handle)?;
 
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "import-runbook" {
-            window
-                .emit("import-runbook", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
     Ok(import_runbook)
 }
 
@@ -60,13 +135,6 @@ fn new_runbook<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .id("new-runbook")
         .build(handle)?;
 
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "new-runbook" {
-            window
-                .emit("new-runbook", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
     Ok(new_runbook)
 }
 
@@ -76,13 +144,6 @@ fn new_workspace<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .id("new-workspace")
         .build(handle)?;
 
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "new-workspace" {
-            window
-                .emit("new-workspace", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
     Ok(import_workspace)
 }
 
@@ -92,13 +153,6 @@ fn export_markdown<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .id("export-markdown")
         .build(handle)?;
 
-    handle.on_menu_event(move |window, event| {
-        if event.id().0 == "export-markdown" {
-            window
-                .emit("export-markdown", 0)
-                .expect("Failed to emit menu event");
-        }
-    });
     Ok(export_markdown)
 }
 
@@ -109,42 +163,44 @@ fn show_devtools<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
         .accelerator("CmdOrCtrl+Shift+I")
         .build(handle)?;
 
-    handle.on_menu_event(move |handle, event| {
-        if event.id().0 == "toggle-devtools" {
-            let window = handle.get_webview_window("main").unwrap();
-            if window.is_devtools_open() {
-                window.close_devtools();
-            } else {
-                window.open_devtools();
-            }
-        }
-    });
-
     Ok(show_devtools)
 }
 
 fn link_menu_item<R: Runtime>(
-    id: &str,
+    id: IdWithNoColons,
     name: &str,
     href: &str,
     handle: &AppHandle<R>,
 ) -> Result<MenuItem<R>> {
+    let id = format!("link-menu-item:{id}:{href}");
     let link = MenuItemBuilder::new(name).id(id).build(handle)?;
-
-    let href = href.to_string();
-    let id = id.to_string();
-
-    handle.on_menu_event(move |_, event| {
-        if event.id().0 == id {
-            // Failing to open a link sucks but let's not error
-            let _ = open::that(&href);
-        }
-    });
 
     Ok(link)
 }
 
-pub fn menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct TabItem {
+    url: String,
+    title: String,
+}
+
+fn open_new_runtime_explainer_runbook<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
+    let open_new_runtime_explainer_runbook =
+        MenuItemBuilder::new("Open New Runbook Execution Engine Docs")
+            .id("open-new-runtime-explainer-runbook")
+            .build(handle)?;
+
+    let handle_clone = handle.clone();
+    handle.on_menu_event(move |_, event| {
+        if event.id().0 == "open-new-runtime-explainer-runbook" {
+            let _ = handle_clone.emit("open-new-runtime-explainer-runbook", 0);
+        }
+    });
+
+    Ok(open_new_runtime_explainer_runbook)
+}
+
+pub fn menu<R: Runtime>(app_handle: &AppHandle<R>, tab_items: &[TabItem]) -> Result<Menu<R>> {
     // Totally just ripped the default menu from the Tauri source, and edited
     // Easier than screwing around with the API 🤫
     let pkg_info = app_handle.package_info();
@@ -157,19 +213,36 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
         ..Default::default()
     };
 
-    let window_menu = Submenu::with_id_and_items(
-        app_handle,
-        "window_menu",
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app_handle, None)?,
-            &PredefinedMenuItem::maximize(app_handle, None)?,
-            #[cfg(target_os = "macos")]
-            &PredefinedMenuItem::separator(app_handle)?,
-            &PredefinedMenuItem::close_window(app_handle, None)?,
-        ],
-    )?;
+    // Build tab menu items first
+    let tab_menu_items: Vec<_> = tab_items
+        .iter()
+        .flat_map(|tab| {
+            let app_handle = app_handle.clone();
+            MenuItemBuilder::new(&tab.title)
+                .id(format!("window-tab-item:{}", tab.url.clone()))
+                .build(&app_handle)
+                .ok()
+        })
+        .collect();
+
+    // Create a vector of all window menu items
+    let minimize = PredefinedMenuItem::minimize(app_handle, None)?;
+    let maximize = PredefinedMenuItem::maximize(app_handle, None)?;
+    let separator1 = PredefinedMenuItem::separator(app_handle)?;
+
+    let mut window_items: Vec<&dyn IsMenuItem<R>> = vec![&minimize, &maximize];
+
+    if !tab_menu_items.is_empty() {
+        window_items.push(&separator1);
+    }
+
+    // Add tab menu items
+    for item in tab_menu_items.iter() {
+        window_items.push(item);
+    }
+
+    let window_menu =
+        Submenu::with_id_and_items(app_handle, "window_menu", "Window", true, &window_items)?;
 
     let help_menu = Submenu::with_id_and_items(
         app_handle,
@@ -177,20 +250,22 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
         "Help",
         true,
         &[
-            #[cfg(not(target_os = "macos"))]
-            &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+            &open_new_runtime_explainer_runbook(app_handle)?,
+            &PredefinedMenuItem::separator(app_handle)?,
             &link_menu_item(
-                "twitter",
+                "twitter".try_into()?,
                 "Atuin Twitter",
                 "https://x.com/atuinsh",
                 app_handle,
             )?,
             &link_menu_item(
-                "mastodon",
+                "mastodon".try_into()?,
                 "Atuin Mastodon",
                 "https://hachyderm.io/@atuin",
                 app_handle,
             )?,
+            #[cfg(not(target_os = "macos"))]
+            &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
         ],
     )?;
 
@@ -203,16 +278,20 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
                 pkg_info.name.clone(),
                 true,
                 &[
-                    &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+                    &PredefinedMenuItem::about(
+                        app_handle,
+                        Some("About Atuin Desktop"),
+                        Some(about_metadata),
+                    )?,
                     &update_check(app_handle)?,
                     &start_sync(app_handle)?,
                     &PredefinedMenuItem::separator(app_handle)?,
                     &PredefinedMenuItem::services(app_handle, None)?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::hide(app_handle, None)?,
+                    &PredefinedMenuItem::hide(app_handle, Some("Hide Atuin Desktop"))?,
                     &PredefinedMenuItem::hide_others(app_handle, None)?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::quit(app_handle, None)?,
+                    &PredefinedMenuItem::quit(app_handle, Some("Quit Atuin Desktop"))?,
                 ],
             )?,
             #[cfg(not(any(
@@ -246,9 +325,8 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>) -> Result<Menu<R>> {
                         &[&export_markdown(app_handle)?],
                     )?,
                     &PredefinedMenuItem::separator(app_handle)?,
-                    &PredefinedMenuItem::close_window(app_handle, None)?,
                     #[cfg(not(target_os = "macos"))]
-                    &PredefinedMenuItem::quit(app_handle, None)?,
+                    &PredefinedMenuItem::quit(app_handle, Some("Quit Atuin Desktop"))?,
                 ],
             )?,
             &Submenu::with_items(

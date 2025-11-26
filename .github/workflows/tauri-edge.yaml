@@ -66,7 +66,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest"
+          - platform: "depot-macos-latest"
             args: "--target aarch64-apple-darwin"
           - platform: "ubuntu-22.04"
             args: ""
@@ -86,6 +86,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.7
+
       - uses: pnpm/action-setup@v4
         with:
           version: latest
@@ -99,12 +102,7 @@ jobs:
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
-
-      - name: Rust cache
-        uses: swatinem/rust-cache@v2
-        with:
-          workspaces: "./backend -> target"
+          targets: ${{ matrix.platform == 'depot-macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: install frontend dependencies
         run: pnpm install
@@ -112,17 +110,19 @@ jobs:
       - name: update edge version
         run: |
           # Get the current version from Cargo.toml
-          version=$(grep -m 1 '^version = ' backend/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          version=$(grep -m 1 '^version = ' Cargo.toml | sed 's/version = "\([^"]*\)".*/\1/')
           # Get the short commit SHA
           commit_sha=$(git rev-parse --short HEAD)
           # Create the new version string
           new_version="${version}-${commit_sha}"
-          # Replace the version in Cargo.toml
+          # Replace the version in both Cargo.toml files
+          sed -i.bak "s/^version = \"${version}\"/version = \"${new_version}\"/" Cargo.toml
           sed -i.bak "s/^version = \"${version}\"/version = \"${new_version}\"/" backend/Cargo.toml
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri-action
         env:
+          TAURI_BUNDLER_DMG_IGNORE_CI: false
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -131,7 +131,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          NODE_OPTIONS: "--max-old-space-size=5120"
+          NODE_OPTIONS: "--max-old-space-size=6144"
+          RUSTC_WRAPPER: sccache
         with:
           args: ${{ matrix.args }}
 

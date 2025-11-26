@@ -1,196 +1,12 @@
-use minijinja::{
-    value::{Enumerator, Object},
-    Environment, Value,
+use minijinja::{Environment, Value};
+use std::collections::HashMap;
+
+use atuin_desktop_templates::{
+    flatten_document, serialized_block_to_state, DocumentTemplateState, TemplateState,
+    WorkspaceTemplateState,
 };
-use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
 
 use crate::state::AtuinState;
-
-/// Flatten a document to include nested blocks (like those in ToggleHeading children)
-/// This creates a linear execution order regardless of UI nesting structure
-pub fn flatten_document(doc: &[serde_json::Value]) -> Vec<serde_json::Value> {
-    let mut flattened = Vec::new();
-    for block in doc {
-        flattened.push(block.clone());
-        if let Some(children) = block.get("children").and_then(|c| c.as_array()) {
-            if !children.is_empty() {
-                flattened.extend(flatten_document(children));
-            }
-        }
-    }
-    flattened
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PtyTemplateState {
-    pub id: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunbookTemplateState {
-    pub id: String,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceTemplateState {
-    /// The root path of the workspace containing atuin.toml
-    /// None for online workspaces (no concept of root)
-    pub root: Option<String>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AtuinTemplateState {
-    pub runbook: RunbookTemplateState,
-    pub workspace: WorkspaceTemplateState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlockState {
-    /// Name it something that's not just type lol
-    pub block_type: String,
-    pub content: String,
-    pub props: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DocumentTemplateState {
-    pub first: BlockState,
-    pub last: BlockState,
-    pub content: Vec<BlockState>,
-    pub named: HashMap<String, BlockState>,
-
-    /// The block previous to the current block
-    /// This is, of course, contextual to what is presently executing - and
-    /// only really makes sense if we're running a template from a Pty.
-    /// We can use the pty map to lookup the metadata for the pty, and from there figure
-    /// out the block ID
-    pub previous: Option<BlockState>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TemplateState {
-    // In the case where a document is empty, we have no document state.
-    pub doc: Option<DocumentTemplateState>,
-    pub var: HashMap<String, Value>,
-    pub workspace: WorkspaceTemplateState,
-}
-
-impl Object for TemplateState {
-    fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
-        match key.as_str()? {
-            "var" => Some(Value::make_object_map(
-                self.clone(),
-                |this| Box::new(this.var.keys().map(Value::from)),
-                |this, key| this.var.get(key.as_str()?).cloned(),
-            )),
-
-            "doc" => self
-                .doc
-                .as_ref()
-                .map(|doc| Value::from_serialize(doc.clone())),
-
-            "workspace" => Some(Value::from_serialize(&self.workspace)),
-
-            _ => None,
-        }
-    }
-
-    fn enumerate(self: &Arc<Self>) -> Enumerator {
-        Enumerator::Str(&["var", "doc", "workspace"])
-    }
-}
-
-pub fn serialized_block_to_state(block: serde_json::Value) -> BlockState {
-    let block = match block.as_object() {
-        Some(obj) => obj,
-        None => {
-            // Return a default block state for non-object values
-            return BlockState {
-                block_type: "unknown".to_string(),
-                content: String::new(),
-                props: HashMap::new(),
-            };
-        }
-    };
-
-    let block_type = block
-        .get("type")
-        .and_then(|t| t.as_str())
-        .unwrap_or("unknown");
-
-    // Content is tricky. It's actually an array, that might look something like this
-    // ```
-    // [
-    //  {"styles":{},"text":"BIG ","type":"text"},
-    //  {"styles":{"textColor":"blue"},"text":"BLOCK","type":"text"},
-    //  {"styles":{},"text":" OF TEXT","type":"text"}
-    // ]
-    // ```
-    // It might be fun to someday turn that into some ascii-coloured text in the terminal,
-    // but for now we should just flatten it into a single string
-
-    // 1. Get the content
-    let content = block.get("content");
-
-    // 2. Flatten into a single string. Ensure the type of each element is "text", ignore what
-    //    isn't for now. If it's none, we can just ignore it
-    let content = if let Some(content) = content {
-        // Ensure it actually is an array
-        match content {
-            serde_json::Value::String(val) => val.clone(),
-            serde_json::Value::Number(val) => val.to_string(),
-
-            serde_json::Value::Array(val) => {
-                let content = val.iter().filter_map(|v| {
-                    let v = v.as_object()?;
-                    if v.get("type")?.as_str()? == "text" {
-                        Some(v.get("text")?.as_str()?.to_string())
-                    } else {
-                        None
-                    }
-                });
-                content.collect::<Vec<String>>().join("")
-            }
-
-            _ => String::from(""),
-        }
-    } else {
-        String::from("")
-    };
-
-    let props: HashMap<String, String> = block
-        .get("props")
-        .and_then(|p| p.as_object())
-        .map(|obj| {
-            obj.iter()
-                .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Now for some block-specific stuff
-
-    // 1. For the editor block, the "code" prop contains the contents of the editor. It would be
-    //    better if the template system exposed that as "content", even though it isn't stored like
-    //    that in the internal schema
-    let content: String = match block_type {
-        "editor" => props.get("code").cloned().unwrap_or(String::from("")),
-
-        "run" => props.get("code").cloned().unwrap_or(String::from("")),
-        _ => content,
-    };
-
-    BlockState {
-        block_type: block_type.to_string(),
-        props,
-        content: content.to_string(),
-    }
-}
 
 #[tauri::command]
 pub async fn template_str(
@@ -288,7 +104,7 @@ pub async fn template_str(
                             i -= 1;
                         }
                     } else {
-                        return Some(flattened_doc.get(i).unwrap().clone());
+                        return Some(flattened_doc.get(i).unwrap());
                     }
                 }
             }
@@ -314,7 +130,7 @@ pub async fn template_str(
                     }
                 });
 
-            name.map(|name| (name, serialized_block_to_state(block.clone())))
+            name.map(|name| (name, serialized_block_to_state(block)))
         })
         .collect();
 
@@ -331,9 +147,9 @@ pub async fn template_str(
     let doc_state = if !doc.is_empty() {
         Some(DocumentTemplateState {
             previous,
-            first: serialized_block_to_state(doc.first().unwrap().clone()),
-            last: serialized_block_to_state(doc.last().unwrap().clone()),
-            content: doc.into_iter().map(serialized_block_to_state).collect(),
+            first: serialized_block_to_state(doc.first().unwrap()),
+            last: serialized_block_to_state(doc.last().unwrap()),
+            content: doc.iter().map(serialized_block_to_state).collect(),
             named,
         })
     } else {
@@ -357,6 +173,7 @@ pub async fn template_str(
 
 /// Template a string with the given variables and document context
 /// This is a simplified version of template_str that doesn't require Tauri state
+#[allow(dead_code)]
 pub fn template_with_context(
     source: &str,
     variables: &HashMap<String, String>,
@@ -422,20 +239,20 @@ pub fn template_with_context(
                     .get("name")?
                     .as_str()?
                     .to_string();
-                Some((name, serialized_block_to_state(block.clone())))
+                Some((name, serialized_block_to_state(block)))
             })
             .collect();
 
         Some(DocumentTemplateState {
-            first: serialized_block_to_state(document.first().ok_or("Document is empty")?.clone()),
-            last: serialized_block_to_state(document.last().ok_or("Document is empty")?.clone()),
+            first: serialized_block_to_state(document.first().ok_or("Document is empty")?),
+            last: serialized_block_to_state(document.last().ok_or("Document is empty")?),
             content: flattened_doc
                 .iter()
-                .map(|b| serialized_block_to_state(b.clone()))
+                .map(serialized_block_to_state)
                 .collect(),
             named,
             previous: Some(serialized_block_to_state(
-                previous.unwrap_or_else(|| serde_json::Value::Null),
+                &previous.unwrap_or_else(|| serde_json::Value::Null),
             )),
         })
     } else {

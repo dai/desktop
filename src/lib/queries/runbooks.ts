@@ -8,10 +8,12 @@ import { RemoteRunbook } from "@/state/models";
 export function runbookById(id: string | undefined) {
   return queryOptions({
     ...localQuery,
+    retry: 10,
+    retryDelay: 500, // gives the workspace manager up to 5 seconds to handle loading FS runbooks metadata
     queryKey: ["runbook", id],
     queryFn: () => {
       if (id) {
-        return Runbook.load(id);
+        return Runbook.load(id, true);
       } else {
         return Promise.resolve(null);
       }

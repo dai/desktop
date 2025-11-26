@@ -11,26 +11,45 @@ on:
   pull_request:
     paths:
       - "backend/**"
+      - "crates/**"
       - ".github/**"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  rust-checks:
+  rust-tests:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         include:
           - name: Test (Ubuntu)
-            command: test
-            components: ""
             os: depot-ubuntu-22.04-4
-          - name: Test (macOS ARM)
-            command: test
-            components: ""
+            atuin_run_url: https://atuin-binary.t3.storage.dev/bin/main/x86_64-unknown-linux-gnu/atuin-run
+          - name: Test (macOS)
             os: macos-latest
+            atuin_run_url: https://atuin-binary.t3.storage.dev/bin/main/aarch64-apple-darwin/atuin-run
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install atuin-run
+        run: |
+          curl -L -o atuin-run ${{ matrix.atuin_run_url }}
+          sudo mv atuin-run /usr/local/bin/atuin-run
+          sudo chmod +x /usr/local/bin/atuin-run
+
+      - name: ${{ matrix.name }}
+        run: |
+          atuin-run ./runbooks/Run\ Rust\ tests.atrb
+
+
+  rust-checks:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
           - name: Check
             command: check
             components: ""
@@ -62,7 +81,6 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.7
 
       - name: Run ${{ matrix.name }}
-        working-directory: backend
         env:
           RUSTC_WRAPPER: sccache
         run: |

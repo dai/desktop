@@ -80,6 +80,7 @@ import SaveBlockModal from "./SaveBlockModal";
 import SavedBlock from "@/state/runbooks/saved_block";
 import { uuidv7 } from "uuidv7";
 import DesktopImportModal from "./DesktopImportModal";
+import RuntimeUpdateNotice from "./RuntimeUpdateNotice";
 
 const globalOptions = getGlobalOptions();
 const UPDATE_CHECK_INTERVAL = globalOptions.channel === "edge" ? 1000 * 60 * 5 : 1000 * 60 * 60;
@@ -93,6 +94,10 @@ const DesktopConnect = React.lazy(() => import("@/components/DesktopConnect/Desk
 const DeleteRunbookModal = React.lazy(() => import("./DeleteRunbookModal"));
 const RunbookSearchIndex = React.lazy(() => import("@/components/CommandMenu/RunbookSearchIndex"));
 const List = React.lazy(() => import("@/components/runbooks/List/List"));
+
+const NEW_RUNTIME_RUNBOOK_ID = AtuinEnv.isProd
+  ? "019ab28f-5e41-7944-a893-c34add764b45"
+  : "019ab25e-4ec7-7dea-af4c-8844a7071ef2";
 
 type MoveBundleDescendant =
   | {
@@ -136,8 +141,6 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showInviteFriends, setShowInviteFriends] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
-  const serialExecution = useStore((state: AtuinState) => state.serialExecution);
-  const stopSerialExecution = useStore((state: AtuinState) => state.stopSerialExecution);
   const [runbookIdToDelete, setRunbookIdToDelete] = useState<string | null>(null);
   const selectedOrg = useStore((state: AtuinState) => state.selectedOrg);
   const connectionState = useStore((state: AtuinState) => state.connectionState);
@@ -320,6 +323,7 @@ function App() {
   }
 
   useTauriEvent("update-check", doUpdateCheck);
+  useTauriEvent("open-new-runtime-explainer-runbook", handleOpenRuntimeExplainerRunbook);
   useEffect(() => {
     window.addEventListener("update-check", doUpdateCheck);
 
@@ -339,6 +343,10 @@ function App() {
 
   useTauriEvent("new-workspace", async () => {
     setShowNewWorkspaceDialog(true);
+  });
+
+  useTauriEvent("activate-tab", async (event) => {
+    openTab(event.payload);
   });
 
   useEffect(() => {
@@ -416,10 +424,8 @@ function App() {
   };
 
   async function doDeleteRunbook(workspaceId: string, runbookId: string) {
-    if (serialExecution.includes(runbookId)) {
-      await invoke("workflow_stop", { id: runbookId });
-      stopSerialExecution(runbookId);
-    }
+    // Cancel any running serial execution for this runbook
+    invoke("stop_serial_execution", { documentId: runbookId });
 
     const workspace = await Workspace.get(workspaceId);
 
@@ -932,6 +938,11 @@ function App() {
     return () => window.removeEventListener("resize", handleResize);
   }, [sidebarOpen, setSidebarOpen]);
 
+  function handleOpenRuntimeExplainerRunbook() {
+    const atuinUrl = `atuin://runbook/${NEW_RUNTIME_RUNBOOK_ID}`;
+    handleDeepLink(atuinUrl, navigateToRunbook);
+  }
+
   return (
     <div
       className="flex w-screen dark:bg-default-50"
@@ -950,6 +961,7 @@ function App() {
         <CommandPalette />
         <RunbookSearchIndex index={runbookIndex} />
         <UpdateNotifier />
+        <RuntimeUpdateNotice openRunbookImport={handleOpenRuntimeExplainerRunbook} />
         <>
           {workspaces?.map((workspace) => (
             <WorkspaceWatcher key={workspace.get("id")} workspace={workspace} />
