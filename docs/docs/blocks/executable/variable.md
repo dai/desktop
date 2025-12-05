@@ -22,9 +22,45 @@ Local variables are **not synced** and remain private to each user's session.
 - **Scope**: Available throughout the runbook for that user only
 - **Use case**: User-specific settings, temporary calculations, private credentials
 
+## Setting Variables from Script and Terminal Blocks
+
+[Script](script.md) and [Terminal](terminal.md) blocks can set multiple template variables by writing to the `$ATUIN_OUTPUT_VARS` file. This provides a programmatic way to create variables based on command execution.
+
+**Usage:**
+
+```bash
+# Simple format for single-line values
+echo "name=value" >> $ATUIN_OUTPUT_VARS
+
+# Heredoc format for multiline values
+echo "description<<EOF" >> $ATUIN_OUTPUT_VARS
+echo "Line 1 of description" >> $ATUIN_OUTPUT_VARS
+echo "Line 2 of description" >> $ATUIN_OUTPUT_VARS
+echo "EOF" >> $ATUIN_OUTPUT_VARS
+
+# For longer multiline strings, use a command group for efficiency
+{
+  echo "myvar<<EOF"
+  echo "Some"
+  echo "Multiline"
+  echo "String"
+  echo "EOF"
+} >> $ATUIN_OUTPUT_VARS
+```
+
+- **Format**: Two formats supported:
+  - Simple: `KEY=VALUE` entries, one per line
+  - Heredoc: `KEY<<DELIMITER` followed by content lines until `DELIMITER` (for multiline values)
+- **Timing**: Variables are captured when scripts exit successfully or terminals close
+- **Location**: Works with both local and remote (SSH) execution
+
+See the [Script](script.md#setting-variables-via-atuin_output_vars) and [Terminal](terminal.md#variables) documentation for detailed examples.
+
 ## Variable Display
 
 Use the Variable Display block to view all currently set variables and their values. This shows both template (synced) and local (not synced) variables for debugging and state inspection.
+
+For variables containing markdown content, use the [Markdown Render](markdown-render.md) block to display beautifully formatted output with collapse/expand and fullscreen capabilities.
 
 ### Usage
 

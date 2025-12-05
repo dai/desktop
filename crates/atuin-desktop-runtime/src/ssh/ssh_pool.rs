@@ -123,6 +123,24 @@ pub enum SshPoolMessage {
     HealthCheck {
         reply_to: oneshot::Sender<Result<()>>,
     },
+    CreateTempFile {
+        host: String,
+        username: Option<String>,
+        prefix: String,
+        reply_to: oneshot::Sender<Result<String>>,
+    },
+    ReadFile {
+        host: String,
+        username: Option<String>,
+        path: String,
+        reply_to: oneshot::Sender<Result<String>>,
+    },
+    DeleteFile {
+        host: String,
+        username: Option<String>,
+        path: String,
+        reply_to: oneshot::Sender<Result<()>>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -283,6 +301,58 @@ impl SshPoolHandle {
         let _ = self.sender.send(msg).await;
         Ok(())
     }
+
+    /// Create a temporary file on the remote system
+    pub async fn create_temp_file(
+        &self,
+        host: &str,
+        username: Option<&str>,
+        prefix: &str,
+    ) -> Result<String> {
+        let (sender, receiver) = oneshot::channel();
+        let msg = SshPoolMessage::CreateTempFile {
+            host: host.to_string(),
+            username: username.map(|u| u.to_string()),
+            prefix: prefix.to_string(),
+            reply_to: sender,
+        };
+
+        let _ = self.sender.send(msg).await;
+        receiver.await?
+    }
+
+    /// Read a file from the remote system
+    pub async fn read_file(
+        &self,
+        host: &str,
+        username: Option<&str>,
+        path: &str,
+    ) -> Result<String> {
+        let (sender, receiver) = oneshot::channel();
+        let msg = SshPoolMessage::ReadFile {
+            host: host.to_string(),
+            username: username.map(|u| u.to_string()),
+            path: path.to_string(),
+            reply_to: sender,
+        };
+
+        let _ = self.sender.send(msg).await;
+        receiver.await?
+    }
+
+    /// Delete a file on the remote system
+    pub async fn delete_file(&self, host: &str, username: Option<&str>, path: &str) -> Result<()> {
+        let (sender, receiver) = oneshot::channel();
+        let msg = SshPoolMessage::DeleteFile {
+            host: host.to_string(),
+            username: username.map(|u| u.to_string()),
+            path: path.to_string(),
+            reply_to: sender,
+        };
+
+        let _ = self.sender.send(msg).await;
+        receiver.await?
+    }
 }
 
 impl Default for SshPoolHandle {
@@ -333,7 +403,7 @@ impl SshPool {
         while let Some(msg) = self.receiver.recv().await {
             self.handle_message(msg).await;
 
-            log::debug!("SshPool Message handled");
+            tracing::debug!("SshPool Message handled");
         }
 
         // Clean up health check task when the pool shuts down
@@ -356,20 +426,20 @@ impl SshPool {
                 let msg = SshPoolMessage::HealthCheck { reply_to: reply_tx };
 
                 if sender.send(msg).await.is_err() {
-                    log::debug!("SSH pool shut down, stopping health check task");
+                    tracing::debug!("SSH pool shut down, stopping health check task");
                     break;
                 }
 
                 let resp = recv.await;
                 match resp {
                     Ok(Ok(())) => {
-                        log::debug!("Scheduled SSH health check successful");
+                        tracing::debug!("Scheduled SSH health check successful");
                     }
                     Ok(Err(err)) => {
-                        log::error!("Scheduled SSH health check failed: {err}");
+                        tracing::error!("Scheduled SSH health check failed: {err}");
                     }
                     Err(_) => {
-                        log::error!("Scheduled SSH health check response failure");
+                        tracing::error!("Scheduled SSH health check response failure");
                     }
                 }
             }
@@ -440,15 +510,15 @@ impl SshPool {
                 let handle = self.handle();
                 // Run the SSH connection in a task to avoid blocking the actor
                 tokio::spawn(async move {
-                    log::trace!("Connecting to SSH host {host} with username {username}");
+                    tracing::trace!("Connecting to SSH host {host} with username {username}");
                     let mut pool_guard = pool.write().await;
                     let session: Result<Arc<Session>, SshPoolConnectionError> = tokio::select! {
                         result = pool_guard.connect(&host, Some(username.as_str()), None, Some(connect_cancel_rx)) => {
-                            log::trace!("SSH connection to {host} with username {username} successful");
+                            tracing::trace!("SSH connection to {host} with username {username} successful");
                             result.map_err(SshPoolConnectionError::from)
                         }
                         _ = &mut cancel_rx => {
-                            log::trace!("SSH connection to {host} with username {username} cancelled");
+                            tracing::trace!("SSH connection to {host} with username {username} cancelled");
                             let _ = connect_cancel_tx.send(());
                             let _ = pool_guard.disconnect(&host, &username).await;
                             Err(SshPoolConnectionError::Cancelled)
@@ -461,15 +531,15 @@ impl SshPool {
                         Err(e) => {
                             match e {
                                 SshPoolConnectionError::Cancelled => {
-                                    log::debug!("SSH connection to {host} with username {username} cancelled");
+                                    tracing::debug!("SSH connection to {host} with username {username} cancelled");
                                     let _ = reply_to
                                         .send(Err(SshPoolConnectionError::Cancelled.into()));
                                     return;
                                 }
                                 SshPoolConnectionError::ConnectionError(e) => {
-                                    log::error!("Failed to connect to SSH host {host}: {e}");
+                                    tracing::error!("Failed to connect to SSH host {host}: {e}");
                                     if let Err(e) = reply_to.send(Err(e)) {
-                                        log::error!("Failed to send error to reply_to: {e:?}");
+                                        tracing::error!("Failed to send error to reply_to: {e:?}");
                                     }
                                     return;
                                 }
@@ -477,7 +547,7 @@ impl SshPool {
                         }
                     };
 
-                    log::trace!("Executing command on channel {channel}: {command}");
+                    tracing::trace!("Executing command on channel {channel}: {command}");
                     let result = session
                         .exec(
                             handle,
@@ -491,7 +561,7 @@ impl SshPool {
 
                     // Handle exec failures - if the session failed, remove it from the pool
                     if let Err(ref e) = result {
-                        log::error!("SSH exec failed for {host}: {e}");
+                        tracing::error!("SSH exec failed for {host}: {e}");
                         let key = format!("{username}@{host}");
 
                         // TODO: use a proper error enum
@@ -500,11 +570,13 @@ impl SshPool {
                             || error_str.contains("connection")
                             || error_str.contains("broken pipe")
                         {
-                            log::debug!("Removing SSH connection due to connection error: {key}");
+                            tracing::debug!(
+                                "Removing SSH connection due to connection error: {key}"
+                            );
                             pool.write().await.connections.remove(&key);
                         } else if let Some(session) = pool.read().await.connections.get(&key) {
                             if !session.send_keepalive().await {
-                                log::debug!(
+                                tracing::debug!(
                                     "Removing dead SSH connection after exec failure: {key}"
                                 );
                                 pool.write().await.connections.remove(&key);
@@ -513,12 +585,12 @@ impl SshPool {
                     }
 
                     if let Err(e) = reply_to.send(result) {
-                        log::error!("Failed to send result to reply_to: {e:?}");
+                        tracing::error!("Failed to send result to reply_to: {e:?}");
                     }
                 });
             }
             SshPoolMessage::ExecFinished { channel, reply_to } => {
-                log::debug!("ExecFinished for channel: {channel}");
+                tracing::debug!("ExecFinished for channel: {channel}");
 
                 if let Some(meta) = self.channels.remove(&channel) {
                     let _ = meta.result_tx.send(());
@@ -527,10 +599,10 @@ impl SshPool {
                 let _ = reply_to.send(Ok(()));
             }
             SshPoolMessage::ExecCancel { channel } => {
-                log::debug!("ExecCancel for channel: {channel}");
+                tracing::debug!("ExecCancel for channel: {channel}");
 
                 if let Some(meta) = self.channels.remove(&channel) {
-                    log::trace!("Sending cancel to channel {channel}");
+                    tracing::trace!("Sending cancel to channel {channel}");
                     let _ = meta.cancel_tx.send(());
                 }
             }
@@ -554,9 +626,9 @@ impl SshPool {
                 let session = match session {
                     Ok(session) => session,
                     Err(e) => {
-                        log::error!("Failed to connect to SSH host {host}: {e}");
+                        tracing::error!("Failed to connect to SSH host {host}: {e}");
                         if let Err(e) = reply_to.send(Err(e)) {
-                            log::error!("Failed to send error to reply_to: {e:?}");
+                            tracing::error!("Failed to send error to reply_to: {e:?}");
                         }
                         return;
                     }
@@ -581,7 +653,7 @@ impl SshPool {
                     },
                 );
 
-                log::debug!("Opening PTY for {channel}");
+                tracing::debug!("Opening PTY for {channel}");
                 let pty_result = session
                     .open_pty(
                         channel.clone(),
@@ -596,7 +668,7 @@ impl SshPool {
 
                 match pty_result {
                     Err(e) => {
-                        log::error!("Failed to open PTY: {e:?}");
+                        tracing::error!("Failed to open PTY: {e:?}");
                         // Check if connection is dead and remove it
                         let key = format!("{username}@{host}");
 
@@ -606,13 +678,13 @@ impl SshPool {
                             || error_str.contains("connection")
                             || error_str.contains("broken pipe")
                         {
-                            log::debug!(
+                            tracing::debug!(
                                 "Removing SSH connection due to PTY connection error: {key}"
                             );
                             self.pool.write().await.connections.remove(&key);
                         } else if let Some(session) = self.pool.read().await.connections.get(&key) {
                             if !session.send_keepalive().await {
-                                log::debug!(
+                                tracing::debug!(
                                     "Removing dead SSH connection after PTY failure: {key}"
                                 );
                                 self.pool.write().await.connections.remove(&key);
@@ -649,14 +721,14 @@ impl SshPool {
                 }
             }
             SshPoolMessage::ClosePty { channel } => {
-                log::debug!("Closing PTY for {channel}");
+                tracing::debug!("Closing PTY for {channel}");
                 if let Some(meta) = self.channels.remove(&channel) {
                     let _ = meta.cancel_tx.send(());
                 }
             }
             SshPoolMessage::HealthCheck { reply_to } => {
                 let connection_count = self.pool.read().await.connections.len();
-                log::debug!(
+                tracing::debug!(
                     "Running SSH connection health check with keepalives on {connection_count} connections"
                 );
                 let mut dead_connections = Vec::new();
@@ -664,7 +736,7 @@ impl SshPool {
                 // Check all connections for liveness using actual keepalives
                 for (key, session) in &self.pool.read().await.connections {
                     if !session.send_keepalive().await {
-                        log::debug!("SSH keepalive failed for connection: {key}");
+                        tracing::debug!("SSH keepalive failed for connection: {key}");
                         dead_connections.push(key.clone());
                     }
                 }
@@ -674,17 +746,83 @@ impl SshPool {
                     self.pool.write().await.connections.remove(key);
                 }
                 if dead_count > 0 {
-                    log::debug!(
+                    tracing::debug!(
                         "Health check removed {dead_count} dead connections, {} remaining",
                         self.pool.read().await.connections.len()
                     );
                 } else if connection_count > 0 {
-                    log::debug!(
+                    tracing::debug!(
                         "Health check completed, all {connection_count} connections responded to keepalive"
                     );
                 }
 
                 let _ = reply_to.send(Ok(()));
+            }
+            SshPoolMessage::CreateTempFile {
+                host,
+                username,
+                prefix,
+                reply_to,
+            } => {
+                let mut pool_guard = self.pool.write().await;
+                let session = match pool_guard
+                    .connect(&host, username.as_deref(), None, None)
+                    .await
+                {
+                    Ok(session) => session,
+                    Err(e) => {
+                        let _ = reply_to.send(Err(e));
+                        return;
+                    }
+                };
+                drop(pool_guard);
+
+                let result = session.create_temp_file(&prefix).await;
+                let _ = reply_to.send(result);
+            }
+            SshPoolMessage::ReadFile {
+                host,
+                username,
+                path,
+                reply_to,
+            } => {
+                let mut pool_guard = self.pool.write().await;
+                let session = match pool_guard
+                    .connect(&host, username.as_deref(), None, None)
+                    .await
+                {
+                    Ok(session) => session,
+                    Err(e) => {
+                        let _ = reply_to.send(Err(e));
+                        return;
+                    }
+                };
+                drop(pool_guard);
+
+                let result = session.read_file(&path).await;
+                let _ = reply_to.send(result);
+            }
+            SshPoolMessage::DeleteFile {
+                host,
+                username,
+                path,
+                reply_to,
+            } => {
+                let mut pool_guard = self.pool.write().await;
+                let session = match pool_guard
+                    .connect(&host, username.as_deref(), None, None)
+                    .await
+                {
+                    Ok(session) => session,
+                    Err(e) => {
+                        let _ = reply_to.send(Err(e));
+                        return;
+                    }
+                };
+                drop(pool_guard);
+
+                let result = session.delete_file(&path).await;
+                let _ = reply_to.send(result);
             }
         }
     }

@@ -18,6 +18,7 @@ import { cn, exportPropMatter } from "@/lib/utils";
 import { createReactBlockSpec } from "@blocknote/react";
 
 import { useStore } from "@/state/store";
+import { Settings } from "@/state/settings";
 import track_event from "@/tracking";
 import CodeEditor, { TabAutoComplete } from "@/lib/blocks/common/CodeEditor/CodeEditor.tsx";
 import InterpreterSelector from "@/lib/blocks/common/InterpreterSelector.tsx";
@@ -285,12 +286,16 @@ const Dropdown = ({
     // We've seen cases where `options` is populated, but none of
     // `fixedOptions`, `variableOptions` or `commandOptions` are.
     // In these cases, `optionsType` is set. So, if we detect this scenario,
-    // check that `optionsType` is fixed and populate the missing options.
-    const { fixedOptions } = dropdown.props;
+    // we populate the missing options.
+    const { fixedOptions, variableOptions, commandOptions } = dropdown.props;
 
-    if (options !== "" && fixedOptions === "" && optionsType === "fixed") {
-      if (optionsType === "fixed") {
+    if (options !== "") {
+      if (fixedOptions === "" && optionsType === "fixed") {
         onOptionsUpdate(OptionType.FIXED, options);
+      } else if (variableOptions === "" && optionsType === "variable") {
+        onOptionsUpdate(OptionType.VARIABLE, options);
+      } else if (commandOptions === "" && optionsType === "command") {
+        onOptionsUpdate(OptionType.COMMAND, options);
       }
     }
   }, []);
@@ -316,102 +321,105 @@ const Dropdown = ({
     <>
       <div
         ref={() => setExecutionReady(true)}
-        className="flex flex-row items-center space-x-3 w-full bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-slate-800 dark:to-cyan-950 rounded-lg p-3 border border-blue-200 dark:border-blue-900 shadow-sm hover:shadow-md transition-all duration-200"
+        className="flex flex-col w-full bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-slate-800 dark:to-cyan-950 rounded-lg p-3 border border-blue-200 dark:border-blue-900 shadow-sm hover:shadow-md transition-all duration-200"
       >
-        <div className="flex items-center">
-          <Button
-            size="sm"
-            variant="ghost"
-            className="bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300"
-            onClick={onOpen}
-          >
-            <ListFilterIcon className="h-4 w-4" />
-          </Button>
-        </div>
+        <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 mb-2">dropdown</span>
+        <div className="flex flex-row items-center space-x-3">
+          <div className="flex items-center">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="bg-blue-100 dark:bg-blue-800 text-blue-600 dark:text-blue-300"
+              onClick={onOpen}
+            >
+              <ListFilterIcon className="h-4 w-4" />
+            </Button>
+          </div>
 
-        <div className="flex-1">
-          <Input
-            placeholder="Template variable name"
-            value={name}
-            onChange={(e) => onNameUpdate(e.target.value)}
-            style={{ fontFamily: "monospace" }}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className={`bg-default-100 ${
-              hasNameError
-                ? "border-red-400 dark:border-red-400 focus:ring-red-500"
-                : "border-blue-200 dark:border-blue-800"
-            }`}
-            disabled={!isEditable}
-          />
-        </div>
-        <div className="flex-1">
-          <Popover
-            open={comboboxOpen}
-            onOpenChange={(open) => {
-              setComboboxOpen(open);
-              // Refresh options when dropdown is opened
-              if (open) {
-                execution?.execute();
-              }
-            }}
-          >
-            <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                role="combobox"
-                aria-expanded={comboboxOpen}
-                className="w-full justify-between"
-              >
-                {execution?.isRunning ? (
-                  <div className="flex items-center">
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600 mr-2"></div>
-                    {
-                      dropdownState?.resolved?.options.find((option) => option.value === selected)
-                        ?.label
-                    }
-                  </div>
-                ) : selected ? (
-                  dropdownState?.resolved?.options.find((option) => option.value === selected)
-                    ?.label
-                ) : (
-                  "Select option..."
-                )}
-                <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="p-0 w-[--radix-popover-trigger-width]">
-              <Command>
-                <CommandInput placeholder="Search options..." />
-                <CommandList>
-                  <CommandEmpty>No option found.</CommandEmpty>
-                  <CommandGroup>
-                    {dropdownState?.resolved?.options.map((option) => (
-                      <CommandItem
-                        key={option.value}
-                        value={option.value}
-                        onSelect={(currentValue) => {
-                          setSelected(currentValue === selected ? "" : currentValue);
-                          onValueUpdate(currentValue === selected ? "" : currentValue);
-                          setComboboxOpen(false);
-                        }}
-                      >
-                        <CheckIcon
-                          className={cn(
-                            "mr-2 h-4 w-4",
-                            selected === option.value ? "opacity-100" : "opacity-0",
-                          )}
-                        />
-                        {option.label}
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
+          <div className="flex-1">
+            <Input
+              placeholder="Template variable name"
+              value={name}
+              onChange={(e) => onNameUpdate(e.target.value)}
+              style={{ fontFamily: "monospace" }}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              className={`bg-default-100 ${
+                hasNameError
+                  ? "border-red-400 dark:border-red-400 focus:ring-red-500"
+                  : "border-blue-200 dark:border-blue-800"
+              }`}
+              disabled={!isEditable}
+            />
+          </div>
+          <div className="flex-1">
+            <Popover
+              open={comboboxOpen}
+              onOpenChange={(open) => {
+                setComboboxOpen(open);
+                // Refresh options when dropdown is opened
+                if (open) {
+                  execution?.execute();
+                }
+              }}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={comboboxOpen}
+                  className="w-full justify-between"
+                >
+                  {execution?.isRunning ? (
+                    <div className="flex items-center">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-gray-300 border-t-blue-600 mr-2"></div>
+                      {
+                        dropdownState?.resolved?.options.find((option) => option.value === selected)
+                          ?.label
+                      }
+                    </div>
+                  ) : selected ? (
+                    dropdownState?.resolved?.options.find((option) => option.value === selected)
+                      ?.label
+                  ) : (
+                    "Select option..."
+                  )}
+                  <ChevronsUpDownIcon className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="p-0 w-[--radix-popover-trigger-width]">
+                <Command>
+                  <CommandInput placeholder="Search options..." />
+                  <CommandList>
+                    <CommandEmpty>No option found.</CommandEmpty>
+                    <CommandGroup>
+                      {dropdownState?.resolved?.options.map((option) => (
+                        <CommandItem
+                          key={option.value}
+                          value={option.value}
+                          onSelect={(currentValue) => {
+                            setSelected(currentValue === selected ? "" : currentValue);
+                            onValueUpdate(currentValue === selected ? "" : currentValue);
+                            setComboboxOpen(false);
+                          }}
+                        >
+                          <CheckIcon
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              selected === option.value ? "opacity-100" : "opacity-0",
+                            )}
+                          />
+                          {option.label}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
       </div>
       {isOpen && (
@@ -577,13 +585,18 @@ export default createReactBlockSpec(
 export const insertDropdown = (schema: any) => (editor: typeof schema.BlockNoteEditor) => ({
   title: "Dropdown",
   subtext: "Select from a list of options, sourced from a variable, command or fixed list",
-  onItemClick: () => {
+  onItemClick: async () => {
     track_event("runbooks.block.create", { type: "dropdown" });
+
+    const interpreter = await Settings.getEffectiveScriptShell();
 
     editor.insertBlocks(
       [
         {
           type: "dropdown",
+          props: {
+            interpreter,
+          },
         },
       ],
       editor.getTextCursorPosition().block.id,

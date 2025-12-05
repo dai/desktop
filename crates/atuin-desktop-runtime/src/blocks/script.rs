@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -9,7 +10,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::blocks::{Block, BlockBehavior};
-use crate::context::{BlockExecutionOutput, DocumentVar};
+use crate::context::{fs_var, BlockExecutionOutput, BlockVars};
 use crate::execution::{
     BlockOutput, CancellationToken, ExecutionContext, ExecutionHandle, ExecutionStatus,
 };
@@ -114,9 +115,9 @@ impl BlockBehavior for Script {
         self,
         context: ExecutionContext,
     ) -> Result<Option<ExecutionHandle>, Box<dyn std::error::Error + Send + Sync>> {
-        log::trace!("Executing script block {id}", id = self.id);
+        tracing::trace!("Executing script block {id}", id = self.id);
 
-        log::trace!(
+        tracing::trace!(
             "Script block {id} execution handle created; ID = {handle_id}",
             id = self.id,
             handle_id = context.handle().id
@@ -132,11 +133,11 @@ impl BlockBehavior for Script {
 
         let context_clone = context.clone();
         tokio::spawn(async move {
-            let (exit_code, captured_output) = self
+            let (exit_code, captured_output, vars) = self
                 .run_script(context.clone(), context.cancellation_token())
                 .await;
 
-            log::trace!(
+            tracing::trace!(
                 "Script block {id} execution completed; Exit code = {exit_code}",
                 id = self.id,
                 exit_code = exit_code
@@ -154,19 +155,28 @@ impl BlockBehavior for Script {
                 Ok(0) => {
                     let output = captured_output.trim().to_string();
 
+                    if let Some(vars) = vars {
+                        let _ = context
+                            .update_active_context(self.id, move |ctx| {
+                                for (key, value) in vars.into_iter() {
+                                    ctx.add_var(key, value, "(script variable output)".to_string());
+                                }
+                            })
+                            .await;
+                    }
+
                     // Store output variable as DocumentVar in context
                     if let Some(var_name) = var_name {
-                        let block_id = self.id;
                         let output_clone = output.clone();
 
                         let _ = context
-                            .update_active_context(block_id, move |ctx| {
-                                log::trace!(
+                            .update_active_context(self.id, move |ctx| {
+                                tracing::trace!(
                                     "Storing output variable {var_name} for script block {block_id}",
                                     var_name = var_name,
-                                    block_id = block_id
+                                    block_id = self.id
                                 );
-                                ctx.insert(DocumentVar::new(var_name, output_clone, "(script output)".to_string()));
+                                ctx.add_var(var_name, output_clone, "(script output)".to_string());
                             })
                             .await;
                     }
@@ -282,9 +292,10 @@ impl Script {
     ) -> (
         Result<i32, Box<dyn std::error::Error + Send + Sync>>,
         String,
+        Option<HashMap<String, String>>,
     ) {
         // Send started lifecycle event to output channel
-        log::trace!(
+        tracing::trace!(
             "Sending started lifecycle event to output channel for script block {id}",
             id = self.id
         );
@@ -296,14 +307,14 @@ impl Script {
             .context_resolver
             .resolve_template(&self.code)
             .unwrap_or_else(|e| {
-                log::warn!("Templating error in script {id}: {e}", id = self.id, e = e);
+                tracing::warn!("Templating error in script {id}: {e}", id = self.id, e = e);
                 self.code.clone()
             });
 
         // Check if SSH execution is needed
         let ssh_host = context.context_resolver.ssh_host().cloned();
         if let Some(ssh_host) = ssh_host {
-            log::trace!(
+            tracing::trace!(
                 "Executing SSH script for script block {id} with SSH host {ssh_host}",
                 id = self.id,
                 ssh_host = ssh_host
@@ -348,10 +359,23 @@ impl Script {
             }
         }
 
+        let fs_var = fs_var::setup();
+        if let Err(e) = fs_var {
+            let _ = context
+                .block_failed(format!(
+                    "Failed to setup temporary file for output variables: {}",
+                    e
+                ))
+                .await;
+            return (Err(e), String::new(), None);
+        }
+        let fs_var = fs_var.unwrap();
+
         cmd.args(final_args);
         cmd.arg(&code);
         cmd.current_dir(&cwd);
         cmd.envs(env_vars);
+        cmd.env("ATUIN_OUTPUT_VARS", fs_var.path().as_os_str());
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
         cmd.stdin(Stdio::null());
@@ -361,7 +385,7 @@ impl Script {
             cmd.process_group(0);
         }
 
-        log::trace!("Spawning process for script block {id}", id = self.id,);
+        tracing::trace!("Spawning process for script block {id}", id = self.id,);
 
         let mut child = match cmd.spawn() {
             Ok(child) => child,
@@ -369,7 +393,7 @@ impl Script {
                 let _ = context
                     .block_failed(format!("Failed to spawn process: {}", e))
                     .await;
-                return (Err(e.into()), String::new());
+                return (Err(e.into()), String::new(), None);
             }
         };
         let pid = child.id();
@@ -389,7 +413,7 @@ impl Script {
                     if n == 0 {
                         break;
                     }
-                    log::trace!(
+                    tracing::trace!(
                         "Sending stdout line to output channel for script block {id}",
                         id = block_id
                     );
@@ -421,7 +445,7 @@ impl Script {
                     if n == 0 {
                         break;
                     }
-                    log::trace!(
+                    tracing::trace!(
                         "Sending stderr line to output channel for script block {id}",
                         id = block_id
                     );
@@ -444,7 +468,7 @@ impl Script {
         let exit_code = if let Some(cancel_rx) = cancellation_receiver {
             tokio::select! {
                 _ = cancel_rx => {
-                    log::trace!("Process for script block {id} cancelled", id = self.id);
+                    tracing::trace!("Process for script block {id} cancelled", id = self.id);
 
                     // Kill the process
                     if let Some(pid) = pid {
@@ -452,7 +476,7 @@ impl Script {
                         {
                             use nix::sys::signal::{self, Signal};
                             use nix::unistd::Pid;
-                            log::trace!("Sending SIGTERM to process {pid}", pid = pid);
+                            tracing::trace!("Sending SIGTERM to process {pid}", pid = pid);
                             // Send SIGTERM to the process group
                             let _ = signal::kill(Pid::from_raw(-(pid as i32)), Signal::SIGTERM);
                         }
@@ -465,7 +489,7 @@ impl Script {
 
                     let _ = context.block_cancelled().await;
 
-                    return (Err("Script execution cancelled".into()), captured);
+                    return (Err("Script execution cancelled".into()), captured, None);
                 }
                 result = child.wait() => {
                     match result {
@@ -473,7 +497,7 @@ impl Script {
                         Err(e) => {
                             let captured = captured_output.read().await.clone();
                             let _ = context.block_failed(format!("Failed to wait for process: {}", e)).await;
-                            return (Err(format!("Failed to wait for process: {}", e).into()), captured);
+                            return (Err(format!("Failed to wait for process: {}", e).into()), captured, None);
                         }
                     }
                 }
@@ -489,13 +513,22 @@ impl Script {
                     return (
                         Err(format!("Failed to wait for process: {}", e).into()),
                         captured,
+                        None,
                     );
                 }
             }
         };
 
         let captured = captured_output.read().await.clone();
-        (Ok(exit_code), captured)
+        if let Ok(vars) = fs_var::finalize(fs_var).await {
+            (Ok(exit_code), captured, Some(vars))
+        } else {
+            (
+                Err("Failed to finalize temporary file for output variables".into()),
+                captured,
+                None,
+            )
+        }
     }
 
     async fn execute_ssh_script(
@@ -507,6 +540,7 @@ impl Script {
     ) -> (
         Result<i32, Box<dyn std::error::Error + Send + Sync>>,
         String,
+        Option<HashMap<String, String>>,
     ) {
         let (username, hostname) = Self::parse_ssh_host(ssh_host);
 
@@ -515,9 +549,25 @@ impl Script {
             None => {
                 let error_msg = "SSH pool not available in execution context";
                 let _ = context.block_failed(error_msg.to_string()).await;
-                return (Err(error_msg.into()), String::new());
+                return (Err(error_msg.into()), String::new(), None);
             }
         };
+
+        // Create remote temp file for variable output
+        let remote_temp_path = match ssh_pool
+            .create_temp_file(&hostname, username.as_deref(), "atuin-desktop-vars")
+            .await
+        {
+            Ok(path) => path,
+            Err(e) => {
+                let error_msg = format!("Failed to create remote temp file: {}", e);
+                let _ = context.block_failed(error_msg.clone()).await;
+                return (Err(error_msg.into()), String::new(), None);
+            }
+        };
+
+        // Prepend environment variable export to the code
+        let code_with_vars = format!("export ATUIN_OUTPUT_VARS='{}'\n{}", remote_temp_path, code);
 
         let channel_id = self.id.to_string();
         let (output_sender, mut output_receiver) = mpsc::channel::<String>(100);
@@ -532,7 +582,11 @@ impl Script {
             None => {
                 let error_msg = "Cancellation receiver already taken";
                 let _ = context.block_failed(error_msg.to_string()).await;
-                return (Err(error_msg.into()), String::new());
+                // Cleanup remote temp file
+                let _ = ssh_pool
+                    .delete_file(&hostname, username.as_deref(), &remote_temp_path)
+                    .await;
+                return (Err(error_msg.into()), String::new(), None);
             }
         };
 
@@ -542,7 +596,7 @@ impl Script {
                 &hostname,
                 username.as_deref(),
                 &self.interpreter,
-                code,
+                &code_with_vars,
                 &channel_id,
                 output_sender,
                 result_tx,
@@ -550,17 +604,23 @@ impl Script {
                 result
             }
             _ = &mut cancel_rx => {
-                log::trace!("Sending cancel to SSH execution for channel {channel_id}");
+                tracing::trace!("Sending cancel to SSH execution for channel {channel_id}");
                 let _ = ssh_pool.exec_cancel(&channel_id).await;
                 let _ = context.block_cancelled().await;
-                return (Err("SSH script execution cancelled before start".into()), String::new());
+                // Cleanup remote temp file
+                let _ = ssh_pool.delete_file(&hostname, username.as_deref(), &remote_temp_path).await;
+                return (Err("SSH script execution cancelled before start".into()), String::new(), None);
             }
         };
 
         if let Err(e) = exec_result {
             let error_msg = format!("Failed to start SSH execution: {}", e);
             let _ = context.block_failed(error_msg.to_string()).await;
-            return (Err(error_msg.into()), String::new());
+            // Cleanup remote temp file
+            let _ = ssh_pool
+                .delete_file(&hostname, username.as_deref(), &remote_temp_path)
+                .await;
+            return (Err(error_msg.into()), String::new(), None);
         }
         let context_clone = context.clone();
         let block_id = self.id;
@@ -592,7 +652,9 @@ impl Script {
                 let captured = captured_output.read().await.clone();
 
                 let _ = context.block_cancelled().await;
-                return (Err("SSH script execution cancelled".into()), captured);
+                // Cleanup remote temp file
+                let _ = ssh_pool.delete_file(&hostname, username.as_deref(), &remote_temp_path).await;
+                return (Err("SSH script execution cancelled".into()), captured, None);
             }
             _ = result_rx => {
                 0
@@ -600,7 +662,28 @@ impl Script {
         };
 
         let captured = captured_output.read().await.clone();
-        (Ok(exit_code), captured)
+
+        // Read variables from remote temp file
+        let vars = match ssh_pool
+            .read_file(&hostname, username.as_deref(), &remote_temp_path)
+            .await
+        {
+            Ok(contents) => {
+                // Parse the file contents using fs_var::parse_vars
+                Some(fs_var::parse_vars(&contents))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read remote temp file for variables: {}", e);
+                None
+            }
+        };
+
+        // Cleanup remote temp file
+        let _ = ssh_pool
+            .delete_file(&hostname, username.as_deref(), &remote_temp_path)
+            .await;
+
+        (Ok(exit_code), captured, vars)
     }
 }
 
@@ -808,6 +891,44 @@ mod tests {
                 ExecutionStatus::Running => continue,
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_atuin_output_vars_env_is_set() {
+        // Verify that the ATUIN_OUTPUT_VARS environment variable is set and points to a writable file
+        let script_code = r#"
+if [ -z "$ATUIN_OUTPUT_VARS" ]; then
+    echo "ATUIN_OUTPUT_VARS not set" >&2
+    exit 1
+fi
+
+# Verify we can write to the file
+echo "TEST_VAR=test_value" >> "$ATUIN_OUTPUT_VARS"
+
+# Output the path so we can see it worked
+echo "Successfully wrote to $ATUIN_OUTPUT_VARS"
+"#;
+        let script = create_test_script(script_code, "bash");
+        let context = create_test_context();
+
+        let handle = script.execute(context).await.unwrap().unwrap();
+
+        // Wait for execution to complete
+        loop {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let status = handle.status.read().await.clone();
+            match status {
+                ExecutionStatus::Success => break,
+                ExecutionStatus::Failed(e) => panic!("Script failed: {}", e),
+                ExecutionStatus::Cancelled => panic!("Script was cancelled"),
+                ExecutionStatus::Running => continue,
+            }
+        }
+
+        // If we got here, the script succeeded, which means:
+        // 1. ATUIN_OUTPUT_VARS was set
+        // 2. The file was writable
+        // 3. The fs_var integration is working
     }
 
     #[tokio::test]

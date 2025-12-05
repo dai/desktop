@@ -192,7 +192,7 @@ impl WorkspaceManager {
         }
 
         // Use selective watching with ignore patterns instead of recursive watching
-        self.setup_selective_watching(&mut debouncer, path.as_ref(), id)?;
+        let watched_dirs = self.setup_selective_watching(&mut debouncer, path.as_ref(), id)?;
 
         let ws = Workspace {
             id: id.to_string(),
@@ -202,6 +202,7 @@ impl WorkspaceManager {
             _debouncer: debouncer,
             fs_ops,
             on_event,
+            watched_dirs,
         };
 
         self.workspaces.insert(id.to_string(), ws);
@@ -487,16 +488,27 @@ impl WorkspaceManager {
                         }
 
                         if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
-                            if workspace.path.join("atuin.toml") == *path {
+                            // Canonicalize for consistent comparison (handles symlinks like /var -> /private/var)
+                            let canonical_path =
+                                path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                            let canonical_atuin_toml = workspace
+                                .path
+                                .join("atuin.toml")
+                                .canonicalize()
+                                .unwrap_or_else(|_| workspace.path.join("atuin.toml"));
+
+                            if canonical_atuin_toml == canonical_path {
                                 full_rescan = true;
                                 break;
                             }
 
-                            let matching_runbook = workspace
-                                .state
-                                .as_ref()
-                                .ok()
-                                .and_then(|s| s.runbooks.values().find(|r| r.path == *path));
+                            let matching_runbook = workspace.state.as_ref().ok().and_then(|s| {
+                                s.runbooks.values().find(|r| {
+                                    let canonical_runbook_path =
+                                        r.path.canonicalize().unwrap_or_else(|_| r.path.clone());
+                                    canonical_runbook_path == canonical_path
+                                })
+                            });
 
                             if let Some(runbook) = matching_runbook {
                                 known_events
@@ -513,11 +525,15 @@ impl WorkspaceManager {
                                 if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
                                     let parent_path = path.parent().unwrap_or(&workspace.path);
                                     let gitignore = create_ignore_matcher(parent_path).ok();
+                                    // Canonicalize to handle symlinks (e.g., /var -> /private/var on macOS)
+                                    let canonical_path =
+                                        path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
                                     if !should_ignore_path(
                                         path,
                                         &workspace.path,
                                         gitignore.as_ref(),
-                                    ) {
+                                    ) && !workspace.watched_dirs.contains(&canonical_path)
+                                    {
                                         log::debug!(
                                             "Adding watcher for new directory: {}",
                                             path.display()
@@ -531,19 +547,27 @@ impl WorkspaceManager {
                                                 path.display(),
                                                 e
                                             );
+                                        } else {
+                                            workspace.watched_dirs.insert(canonical_path);
                                         }
                                     }
                                 }
                             }
                             EventKind::Remove(_) => {
                                 // Remove watcher for deleted directory/file
-                                if let Some(workspace_mut) = self.workspaces.get_mut(workspace_id) {
-                                    log::debug!(
-                                        "Removing watcher for deleted path: {}",
-                                        path.display()
-                                    );
-                                    if let Err(e) = workspace_mut._debouncer.unwatch(path) {
-                                        log::debug!("Failed to unwatch deleted path {} (this is normal): {}", path.display(), e);
+                                if let Some(workspace) = self.workspaces.get_mut(workspace_id) {
+                                    // Note: canonicalize may fail for deleted paths, so we try both
+                                    let canonical_path =
+                                        path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                                    if workspace.watched_dirs.contains(&canonical_path) {
+                                        log::debug!(
+                                            "Removing watcher for deleted path: {}",
+                                            path.display()
+                                        );
+                                        if let Err(e) = workspace._debouncer.unwatch(path) {
+                                            log::debug!("Failed to unwatch deleted path {} (this is normal): {}", path.display(), e);
+                                        }
+                                        workspace.watched_dirs.remove(&canonical_path);
                                     }
                                 }
                             }
@@ -618,37 +642,74 @@ impl WorkspaceManager {
                         }
                     }
 
-                    let mut watched_dirs = HashSet::new();
+                    // Collect all directories that should be watched from the new state
+                    // Use canonicalized paths to handle symlinks (e.g., /var -> /private/var on macOS)
+                    let mut new_watched_dirs: HashSet<PathBuf> = HashSet::new();
+                    // Always include the workspace root
+                    let canonical_root = workspace
+                        .path
+                        .canonicalize()
+                        .unwrap_or_else(|_| workspace.path.clone());
+                    new_watched_dirs.insert(canonical_root);
+
                     for entry in updated.entries.iter() {
                         if !entry.path.is_dir() {
                             continue;
                         }
 
                         let parent_path = entry.path.parent().unwrap_or(&workspace.path);
-                        if watched_dirs.contains(&parent_path) {
-                            continue;
-                        }
-
                         let gitignore = create_ignore_matcher(parent_path).ok();
                         if !should_ignore_path(&entry.path, &workspace.path, gitignore.as_ref()) {
-                            log::debug!(
-                                "Adding watcher for directory found during rescan: {}",
-                                entry.path.display()
-                            );
-                            if let Err(e) = workspace
-                                ._debouncer
-                                .watch(parent_path, RecursiveMode::NonRecursive)
-                            {
-                                log::warn!(
-                                    "Failed to watch new directory {}: {}",
-                                    parent_path.display(),
-                                    e
-                                );
-                            } else {
-                                watched_dirs.insert(parent_path);
-                            }
+                            let canonical_path = entry
+                                .path
+                                .canonicalize()
+                                .unwrap_or_else(|_| entry.path.clone());
+                            new_watched_dirs.insert(canonical_path);
                         }
                     }
+
+                    // Add watchers for new directories
+                    let dirs_to_add: Vec<_> = new_watched_dirs
+                        .difference(&workspace.watched_dirs)
+                        .cloned()
+                        .collect();
+                    for dir in dirs_to_add {
+                        log::debug!(
+                            "Adding watcher for directory found during rescan: {}",
+                            dir.display()
+                        );
+                        if let Err(e) = workspace
+                            ._debouncer
+                            .watch(dir.clone(), RecursiveMode::NonRecursive)
+                        {
+                            log::warn!("Failed to watch new directory {}: {}", dir.display(), e);
+                            // Don't track directories we failed to watch
+                            new_watched_dirs.remove(&dir);
+                        }
+                    }
+
+                    // Remove watchers for deleted directories
+                    let dirs_to_remove: Vec<_> = workspace
+                        .watched_dirs
+                        .difference(&new_watched_dirs)
+                        .cloned()
+                        .collect();
+                    for dir in dirs_to_remove {
+                        log::debug!(
+                            "Removing watcher for directory removed during rescan: {}",
+                            dir.display()
+                        );
+                        if let Err(e) = workspace._debouncer.unwatch(&dir) {
+                            log::debug!(
+                                "Failed to unwatch deleted directory {} (this is normal): {}",
+                                dir.display(),
+                                e
+                            );
+                        }
+                    }
+
+                    // Update the tracked set of watched directories
+                    workspace.watched_dirs = new_watched_dirs;
 
                     workspace.state = Ok(updated);
                     (workspace.on_event)(workspace.state.clone().into());
@@ -715,7 +776,7 @@ impl WorkspaceManager {
         >,
         root_path: &Path,
         workspace_id: &str,
-    ) -> Result<(), WorkspaceError> {
+    ) -> Result<HashSet<PathBuf>, WorkspaceError> {
         log::debug!(
             "Setting up selective watching for workspace {} at {}",
             workspace_id,
@@ -725,7 +786,7 @@ impl WorkspaceManager {
         // TODO: This is a single threaded walker. Investigate perf bonus of a parallel walker
         let walker = create_ignore_walker(root_path).build();
 
-        let mut watched_count = 0;
+        let mut watched_dirs = HashSet::new();
         for entry in walker.filter_map(Result::ok) {
             let path = entry.path();
             if path.is_dir() {
@@ -736,12 +797,17 @@ impl WorkspaceManager {
                         workspace_id: workspace_id.to_string(),
                         message: format!("Failed to watch directory {}: {}", path.display(), e),
                     })?;
-                watched_count += 1;
+                // Canonicalize to handle symlinks (e.g., /var -> /private/var on macOS)
+                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                watched_dirs.insert(canonical_path);
             }
         }
 
-        log::info!("Watching {watched_count} directories for workspace {workspace_id}",);
-        Ok(())
+        log::info!(
+            "Watching {} directories for workspace {workspace_id}",
+            watched_dirs.len()
+        );
+        Ok(watched_dirs)
     }
 }
 
@@ -1651,6 +1717,206 @@ mod tests {
                     assert!(!state.runbooks.contains_key("test-runbook-id"));
                     assert!(state.runbooks.contains_key("test-runbook-id2"));
                 }
+            }
+        }
+
+        // Clean up
+        {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager.unwatch_workspace("test-workspace").await.unwrap();
+        }
+
+        drop(temp_dir);
+    }
+
+    /// Tests that subdirectories existing before watching starts are correctly watched.
+    /// This verifies that `setup_selective_watching` properly walks and watches all
+    /// existing directories in the workspace.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_preexisting_subdirectories_are_watched() {
+        let (temp_dir, workspace_path) = setup_test_workspace().await;
+        let collector = TestEventCollector::new();
+        let manager = WorkspaceManager::new();
+        let manager_arc = Arc::new(Mutex::new(Some(manager)));
+
+        // Create a nested folder structure BEFORE watching starts
+        let folder1 = workspace_path.join("folder1");
+        let folder2 = folder1.join("folder2");
+        tokio::fs::create_dir_all(&folder2).await.unwrap();
+
+        // Start watching the workspace
+        {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager
+                .watch_workspace(
+                    &workspace_path,
+                    "test-workspace",
+                    collector.create_handler(),
+                    manager_arc.clone(),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Wait for initial state event
+        let initial_events = collector.wait_for_events(1, 1000).await;
+        assert!(!initial_events.is_empty());
+        collector.clear_events().await;
+
+        // Give the workspace manager time to set up file watching
+        sleep(Duration::from_millis(250)).await;
+
+        // Create a runbook in the deepest preexisting folder
+        // This should be detected because setup_selective_watching should have
+        // walked and watched all existing directories
+        create_test_runbook(
+            &folder2,
+            "preexisting_deep_runbook",
+            "preexisting-deep-runbook-id",
+        )
+        .await;
+
+        // Wait for the runbook creation to be detected
+        let runbook_events = collector.wait_for_events(1, 3000).await;
+        assert!(
+            !runbook_events.is_empty(),
+            "Runbook creation in preexisting nested subdirectory should trigger events. \
+             This indicates setup_selective_watching is not correctly watching all directories."
+        );
+
+        // Verify the runbook appears in the workspace state
+        assert!(
+            wait_for_state_condition(
+                &manager_arc,
+                "test-workspace",
+                |state| state.runbooks.contains_key("preexisting-deep-runbook-id"),
+                3000
+            )
+            .await,
+            "Runbook created in preexisting nested subdirectory should appear in workspace state"
+        );
+
+        // Clean up
+        {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager.unwatch_workspace("test-workspace").await.unwrap();
+        }
+
+        drop(temp_dir);
+    }
+
+    /// Regression test for https://github.com/atuinsh/desktop/issues/232
+    ///
+    /// This test reproduces the exact user flow from the bug report:
+    /// 1. Create an empty workspace (done in setup)
+    /// 2. Create an empty folder in the workspace via the API
+    /// 3. Create a runbook in that folder via the API (simulating right-click -> New Runbook)
+    /// 4. Verify the runbook is created and detected
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_create_folder_then_runbook_via_api() {
+        let (temp_dir, workspace_path) = setup_test_workspace().await;
+        let collector = TestEventCollector::new();
+        let manager = WorkspaceManager::new();
+        let manager_arc = Arc::new(Mutex::new(Some(manager)));
+
+        // Start watching the workspace
+        {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager
+                .watch_workspace(
+                    &workspace_path,
+                    "test-workspace",
+                    collector.create_handler(),
+                    manager_arc.clone(),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Wait for initial state event
+        let initial_events = collector.wait_for_events(1, 1000).await;
+        assert!(!initial_events.is_empty());
+        collector.clear_events().await;
+
+        // Step 2: Create an empty folder via the API (simulates UI "New Folder")
+        let folder_path = {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager
+                .create_folder("test-workspace", None, "My Folder")
+                .await
+                .expect("Should create folder successfully")
+        };
+
+        // Wait for folder creation to be detected
+        let folder_events = collector.wait_for_events(1, 2000).await;
+        assert!(
+            !folder_events.is_empty(),
+            "Folder creation should trigger events"
+        );
+        collector.clear_events().await;
+
+        // Step 3: Create a runbook in the folder via the API
+        // (simulates right-click folder -> "New Runbook")
+        // The parent_folder_id is the full path to the folder, as the UI would pass it
+        let runbook_result = {
+            let mut manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_mut().unwrap();
+            manager
+                .create_runbook(
+                    "test-workspace",
+                    Some(folder_path.to_str().unwrap()),
+                    "Test Runbook",
+                    &serde_yaml::Value::Sequence(vec![]),
+                    None,
+                )
+                .await
+        };
+
+        // Step 4: Verify the runbook was created successfully
+        assert!(
+            runbook_result.is_ok(),
+            "create_runbook should succeed, but got error: {:?}",
+            runbook_result.err()
+        );
+
+        let runbook_id = runbook_result.unwrap();
+
+        // Verify the runbook appears in the workspace state
+        assert!(
+            wait_for_state_condition(
+                &manager_arc,
+                "test-workspace",
+                |state| state.runbooks.contains_key(&runbook_id),
+                3000
+            )
+            .await,
+            "Runbook created via API should appear in workspace state"
+        );
+
+        // Verify the runbook is in the correct location (inside the folder)
+        {
+            let manager_guard = manager_arc.lock().await;
+            let manager = manager_guard.as_ref().unwrap();
+            if let Some(workspace) = manager.workspaces.get("test-workspace") {
+                if let Ok(state) = &workspace.state {
+                    let runbook = state.runbooks.get(&runbook_id).unwrap();
+                    assert_eq!(runbook.name, "Test Runbook");
+                    assert!(
+                        runbook.path.starts_with(&folder_path),
+                        "Runbook path {:?} should be inside folder {:?}",
+                        runbook.path,
+                        folder_path
+                    );
+                } else {
+                    panic!("Workspace state should be Ok");
+                }
+            } else {
+                panic!("Workspace should exist");
             }
         }
 

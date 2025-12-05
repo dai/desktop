@@ -11,6 +11,7 @@ use tauri::{http, App, AppHandle, Manager, RunEvent};
 use tauri_plugin_log::fern::colors::{Color, ColoredLevelConfig};
 use time::format_description::well_known::Rfc3339;
 
+mod advanced_settings;
 mod blocks;
 mod db;
 mod dotfiles;
@@ -43,6 +44,7 @@ use atuin_history::stats as atuin_stats;
 use db::{GlobalStats, HistoryDB, UIHistory};
 use dotfiles::aliases::aliases;
 
+use crate::advanced_settings::AdvancedSettings;
 use crate::menu::TabItem;
 
 #[derive(Debug, serde::Serialize)]
@@ -483,6 +485,7 @@ fn main() {
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             list,
             search,
@@ -500,12 +503,14 @@ fn main() {
             get_app_version,
             get_platform_info,
             update_window_menu_tabs,
+            advanced_settings::get_advanced_settings,
             run::pty::pty_write,
             run::pty::pty_resize,
             run::shell::check_binary_exists,
             install::install_cli,
             install::is_cli_installed,
             install::setup_cli,
+            install::get_default_shell,
             blocks::postgres::command::postgres_query,
             blocks::postgres::command::postgres_execute,
             dotfiles::aliases::import_aliases,
@@ -572,6 +577,8 @@ fn main() {
             commands::workspaces::delete_folder,
             commands::workspaces::move_items,
             commands::workspaces::move_items_between_workspaces,
+            commands::audio::list_sounds,
+            commands::audio::play_sound,
             shared_state::get_shared_state_document,
             shared_state::push_optimistic_update,
             shared_state::update_shared_state_document,
@@ -622,19 +629,34 @@ fn main() {
             }
         })
         .setup(|app| {
+            let advanced_settings_path = app
+                .path()
+                .app_config_dir()
+                .expect("Failed to get app config dir")
+                .join("advanced_settings");
+
+            let advanced_settings = AdvancedSettings::load(&advanced_settings_path)?;
+            app.manage(advanced_settings.clone());
+
             // Load login shell environment early in startup
             // This is best-effort only and should never crash the app
             #[cfg(unix)]
-            run_async_command(async {
-                match crate::util::load_login_shell_environment().await {
-                    Ok(()) => {
-                        log::info!("Successfully loaded login shell environment");
+            if advanced_settings.copy_shell_env {
+                run_async_command(async {
+                    match crate::util::load_login_shell_environment().await {
+                        Ok(()) => {
+                            log::info!("Successfully loaded login shell environment");
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to load login shell environment: {}", e);
+                        }
                     }
-                    Err(e) => {
-                        log::warn!("Failed to load login shell environment: {}", e);
-                    }
-                }
-            });
+                });
+            } else {
+                log::warn!(
+                    "Skipping login shell environment copy due to advanced configuration settings"
+                );
+            }
 
             backup_databases(app)?;
 
