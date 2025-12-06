@@ -5,13 +5,13 @@
       
       
       
-        <link rel="canonical" href="https://man.atuin.sh/blocks/network/ssh/">
+        <link rel="canonical" href="https://man.atuin.sh/blocks/executable/markdown-render/">
       
       
-        <link rel="prev" href="../http/">
+        <link rel="prev" href="../kubernetes/">
       
       
-        <link rel="next" href="../../../hub/getting-started/">
+        <link rel="next" href="../script/">
       
       
       <link rel="icon" href="../../../assets/images/favicon.png">
@@ -19,7 +19,7 @@
     
     
       
-        <title>SSH - Atuin Desktop Docs</title>
+        <title>Markdown Render - Atuin Desktop Docs</title>
       
     
     
@@ -58,11 +58,11 @@
       
         <meta property="og:type" content="website">
       
-        <meta property="og:title" content="SSH - Atuin Desktop Docs">
+        <meta property="og:title" content="Markdown Render - Atuin Desktop Docs">
       
         <meta property="og:description" content="None">
       
-        <meta property="og:image" content="https://man.atuin.sh/assets/images/social/blocks/network/ssh.png">
+        <meta property="og:image" content="https://man.atuin.sh/assets/images/social/blocks/executable/markdown-render.png">
       
         <meta property="og:image:type" content="image/png">
       
@@ -70,15 +70,15 @@
       
         <meta property="og:image:height" content="630">
       
-        <meta property="og:url" content="https://man.atuin.sh/blocks/network/ssh/">
+        <meta property="og:url" content="https://man.atuin.sh/blocks/executable/markdown-render/">
       
         <meta name="twitter:card" content="summary_large_image">
       
-        <meta name="twitter:title" content="SSH - Atuin Desktop Docs">
+        <meta name="twitter:title" content="Markdown Render - Atuin Desktop Docs">
       
         <meta name="twitter:description" content="None">
       
-        <meta name="twitter:image" content="https://man.atuin.sh/assets/images/social/blocks/network/ssh.png">
+        <meta name="twitter:image" content="https://man.atuin.sh/assets/images/social/blocks/executable/markdown-render.png">
       
     
     
@@ -111,7 +111,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#ssh" class="md-skip">
+        <a href="#markdown-render" class="md-skip">
           Skip to content
         </a>
       
@@ -146,7 +146,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              SSH
+              Markdown Render
             
           </span>
         </div>
@@ -762,6 +762,8 @@
                 
   
   
+    
+  
   
   
     
@@ -771,11 +773,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2">
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_2" checked>
         
           
           <label class="md-nav__link" for="__nav_6_2" id="__nav_6_2_label" tabindex="0">
@@ -791,7 +793,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_2_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_6_2">
             <span class="md-nav__icon md-icon"></span>
             Executable
@@ -805,7 +807,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/" class="md-nav__link">
+      <a href="../" class="md-nav__link">
         
   
   
@@ -828,7 +830,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/directory/" class="md-nav__link">
+      <a href="../directory/" class="md-nav__link">
         
   
   
@@ -851,7 +853,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/dropdown/" class="md-nav__link">
+      <a href="../dropdown/" class="md-nav__link">
         
   
   
@@ -874,7 +876,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/env/" class="md-nav__link">
+      <a href="../env/" class="md-nav__link">
         
   
   
@@ -897,7 +899,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/kubernetes/" class="md-nav__link">
+      <a href="../kubernetes/" class="md-nav__link">
         
   
   
@@ -917,10 +919,32 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../executable/markdown-render/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Markdown Render
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -931,6 +955,128 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variable-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      Variable Name
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      Max Lines
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#collapseexpand" class="md-nav__link">
+    <span class="md-ellipsis">
+      Collapse/Expand
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fullscreen-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fullscreen Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#selectable-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      Selectable Text
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Workflow
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#supported-markdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      Supported Markdown
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#view-mode-vs-edit-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      View Mode vs Edit Mode
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -943,7 +1089,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/script/" class="md-nav__link">
+      <a href="../script/" class="md-nav__link">
         
   
   
@@ -966,7 +1112,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/terminal/" class="md-nav__link">
+      <a href="../terminal/" class="md-nav__link">
         
   
   
@@ -989,7 +1135,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../executable/variable/" class="md-nav__link">
+      <a href="../variable/" class="md-nav__link">
         
   
   
@@ -1274,8 +1420,6 @@
                 
   
   
-    
-  
   
   
     
@@ -1285,11 +1429,11 @@
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_5">
         
           
           <label class="md-nav__link" for="__nav_6_5" id="__nav_6_5_label" tabindex="0">
@@ -1305,7 +1449,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_6_5">
             <span class="md-nav__icon md-icon"></span>
             Network
@@ -1319,7 +1463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../" class="md-nav__link">
+      <a href="../../network/" class="md-nav__link">
         
   
   
@@ -1342,7 +1486,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../http/" class="md-nav__link">
+      <a href="../../network/http/" class="md-nav__link">
         
   
   
@@ -1362,32 +1506,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    SSH
-    
-  </span>
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../network/ssh/" class="md-nav__link">
         
   
   
@@ -1398,53 +1520,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
-    <span class="md-ellipsis">
-      Authentication
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#running-locally" class="md-nav__link">
-    <span class="md-ellipsis">
-      Running locally
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#connection-pooling" class="md-nav__link">
-    <span class="md-ellipsis">
-      Connection pooling
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1611,27 +1686,102 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#authentication" class="md-nav__link">
+  <a href="#configuration" class="md-nav__link">
     <span class="md-ellipsis">
-      Authentication
+      Configuration
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#variable-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      Variable Name
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#max-lines" class="md-nav__link">
+    <span class="md-ellipsis">
+      Max Lines
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#features" class="md-nav__link">
+    <span class="md-ellipsis">
+      Features
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Features">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#collapseexpand" class="md-nav__link">
+    <span class="md-ellipsis">
+      Collapse/Expand
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fullscreen-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      Fullscreen Mode
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#selectable-text" class="md-nav__link">
+    <span class="md-ellipsis">
+      Selectable Text
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      Example Workflow
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#running-locally" class="md-nav__link">
+  <a href="#supported-markdown" class="md-nav__link">
     <span class="md-ellipsis">
-      Running locally
+      Supported Markdown
     </span>
   </a>
   
 </li>
       
         <li class="md-nav__item">
-  <a href="#connection-pooling" class="md-nav__link">
+  <a href="#view-mode-vs-edit-mode" class="md-nav__link">
     <span class="md-ellipsis">
-      Connection pooling
+      View Mode vs Edit Mode
     </span>
   </a>
   
@@ -1653,7 +1803,7 @@
 
 
   
-    <a href="https://github.com/atuinsh/desktop/edit/main/docs/docs/blocks/network/ssh.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/atuinsh/desktop/edit/main/docs/docs/blocks/executable/markdown-render.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"></path></svg>
     </a>
@@ -1662,63 +1812,53 @@
     
       
     
-    <a href="https://github.com/atuinsh/desktop/raw/main/docs/docs/blocks/network/ssh.md" title="View source of this page" class="md-content__button md-icon">
+    <a href="https://github.com/atuinsh/desktop/raw/main/docs/docs/blocks/executable/markdown-render.md" title="View source of this page" class="md-content__button md-icon">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M17 18c.56 0 1 .44 1 1s-.44 1-1 1-1-.44-1-1 .44-1 1-1m0-3c-2.73 0-5.06 1.66-6 4 .94 2.34 3.27 4 6 4s5.06-1.66 6-4c-.94-2.34-3.27-4-6-4m0 6.5a2.5 2.5 0 0 1-2.5-2.5 2.5 2.5 0 0 1 2.5-2.5 2.5 2.5 0 0 1 2.5 2.5 2.5 2.5 0 0 1-2.5 2.5M9.27 20H6V4h7v5h5v4.07c.7.08 1.36.25 2 .49V8l-6-6H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4.5a8.2 8.2 0 0 1-1.23-2"></path></svg>
     </a>
   
 
 
-<h1 id="ssh">SSH</h1>
-<p>SSH is another "contextual" block - just like setting a directory or environment variable.</p>
-<figure class="img-light">
-  <picture>
-    <a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../../../images/ssh-1-light.png" data-desc-position="bottom"><img src="../../../images/ssh-1-light.png" alt="SSH Block"></a>
-  </picture>
-  <figcaption>Example SSH usage</figcaption>
-</figure>
-<figure class="img-dark">
-  <picture>
-    <a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../../../images/ssh-1-dark.png" data-desc-position="bottom"><img src="../../../images/ssh-1-dark.png" alt="SSH Block"></a>
-  </picture>
-  <figcaption>Example SSH usage</figcaption>
-</figure>
-
-<p>Insert an SSH block, and fill in the host. All following <a href="../../executable/terminal/" title="mention">terminal</a> or <a href="../../executable/script/" title="mention">script</a> blocks will now execute on the remote machine. If the block is going to execute on a remote machine, it will be outlined in blue.</p>
-<h3 id="authentication">Authentication</h3>
-<p>SSH authentication works like the standard <code>ssh</code> command, trying methods in this order:</p>
-<ol>
-<li><strong>SSH Agent</strong> - All keys loaded in your SSH agent</li>
-<li><strong>SSH Config</strong> - Identity files specified in <code>~/.ssh/config</code></li>
-<li><strong>Default Keys</strong> - Standard SSH keys in <code>~/.ssh/</code>:</li>
-<li><code>id_rsa</code></li>
-<li><code>id_ecdsa</code></li>
-<li><code>id_ecdsa_sk</code> (FIDO/U2F security key)</li>
-<li><code>id_ed25519</code></li>
-<li><code>id_ed25519_sk</code> (FIDO/U2F security key)</li>
-<li><code>id_xmss</code></li>
-<li><code>id_dsa</code></li>
-</ol>
-<p>Tailscale SSH works as expected. Password-protected keys must be added to your SSH agent with <code>ssh-add</code>, though soon we will support full config in the UI.</p>
-<p>Your SSH config is fully respected, including <code>ProxyJump</code>, <code>ProxyCommand</code>, <code>IdentityAgent</code>, and other options.</p>
-<h3 id="running-locally">Running locally</h3>
-<p>If you wish to revert back to local execution, insert a "host" block.</p>
-<figure class="img-light">
-  <picture>
-    <a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../../../images/ssh-2-light.png" data-desc-position="bottom"><img src="../../../images/ssh-2-light.png" alt="SSH Block"></a>
-  </picture>
-  <figcaption>Example SSH usage</figcaption>
-</figure>
-<figure class="img-dark">
-  <picture>
-    <a class="glightbox" data-type="image" data-width="auto" data-height="auto" href="../../../images/ssh-2-dark.png" data-desc-position="bottom"><img src="../../../images/ssh-2-dark.png" alt="SSH Block"></a>
-  </picture>
-  <figcaption>Example SSH usage</figcaption>
-</figure>
-
-<p>In the future, the host block will support toggling between different connected machines. Right now, it only supports localhost</p>
-<h3 id="connection-pooling">Connection pooling</h3>
-<p>Our SSH integration will only open a single SSH connection, and multiplex multiple sessions through it. This means that once connected, block execution will feel fast + low latency</p>
+<h1 id="markdown-render">Markdown Render</h1>
+<p>The Markdown Render block displays variable content as rendered markdown. Useful for displaying formatted output from scripts, API responses, or any variable that contains markdown text.</p>
+<h2 id="configuration">Configuration</h2>
+<h3 id="variable-name">Variable Name</h3>
+<p>The name of the variable containing markdown content to render. Supports template syntax:</p>
+<div class="language-handlebars highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="cp">{{</span><span class="nv">var.release_notes</span><span class="cp">}}</span>
+</span></code></pre></div>
+<h3 id="max-lines">Max Lines</h3>
+<p>Control the height of the content area by setting the maximum number of visible lines. Content exceeding this limit becomes scrollable. Default is 12 lines.</p>
+<h2 id="features">Features</h2>
+<h3 id="collapseexpand">Collapse/Expand</h3>
+<p>Toggle between a compact collapsed view and full expanded view to manage screen space. When collapsed, a gradient fade indicates more content is available.</p>
+<h3 id="fullscreen-mode">Fullscreen Mode</h3>
+<p>Open the rendered markdown in a fullscreen modal for easier reading of long content. Press <code>Escape</code> or click outside to close.</p>
+<h3 id="selectable-text">Selectable Text</h3>
+<p>All rendered content is fully selectable and copyable, making it easy to extract information from the output.</p>
+<h2 id="example-workflow">Example Workflow</h2>
+<p>A common pattern is using a Script block to generate markdown content, then displaying it with a Markdown Render block:</p>
+<p><strong>Script Block:</strong>
+</p><div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Fetch release notes and output as markdown</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>gh<span class="w"> </span>release<span class="w"> </span>view<span class="w"> </span>--json<span class="w"> </span>body<span class="w"> </span>--jq<span class="w"> </span><span class="s1">'.body'</span>
+</span></code></pre></div><p></p>
+<p>Save the output to a variable (e.g., <code>release_notes</code>), then reference it in your Markdown Render block.</p>
+<p><strong>Markdown Render Block:</strong>
+- Variable: <code>release_notes</code>
+- Max Lines: <code>20</code></p>
+<h2 id="supported-markdown">Supported Markdown</h2>
+<p>The block supports GitHub Flavored Markdown (GFM), including:</p>
+<ul>
+<li>Headers and paragraphs</li>
+<li><strong>Bold</strong>, <em>italic</em>, and ~~strikethrough~~ text</li>
+<li>Ordered and unordered lists</li>
+<li>Code blocks with syntax highlighting</li>
+<li>Tables</li>
+<li>Links and images</li>
+<li>Blockquotes</li>
+<li>Task lists</li>
+</ul>
+<h2 id="view-mode-vs-edit-mode">View Mode vs Edit Mode</h2>
+<p>In <strong>edit mode</strong>, you can configure the variable name and line count. In <strong>view mode</strong> (when running the runbook), only the variable name and rendered content are shown for a cleaner experience.</p>
 
 
 
@@ -1741,7 +1881,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"></path></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="October 29, 2025 23:23:32 UTC"><span class="timeago" datetime="2025-10-29T23:23:32+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="October 29, 2025 23:23:32 UTC">2025-10-29</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="December 4, 2025 18:35:19 UTC"><span class="timeago" datetime="2025-12-04T18:35:19+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="December 4, 2025 18:35:19 UTC">2025-12-04</span>
   </span>
 
     
@@ -1751,7 +1891,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"></path></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="September 19, 2025 00:26:50 UTC"><span class="timeago" datetime="2025-09-19T00:26:50+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="September 19, 2025 00:26:50 UTC">2025-09-19</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-timeago" title="December 4, 2025 18:35:19 UTC"><span class="timeago" datetime="2025-12-04T18:35:19+00:00" locale="en"></span></span><span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_date" title="December 4, 2025 18:35:19 UTC">2025-12-04</span>
   </span>
 
     
