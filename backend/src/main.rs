@@ -7,11 +7,12 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 use tauri::path::BaseDirectory;
-use tauri::{http, App, AppHandle, Manager, RunEvent};
+use tauri::{http, App, AppHandle, Manager, RunEvent, Runtime};
 use tauri_plugin_log::fern::colors::{Color, ColoredLevelConfig};
 use time::format_description::well_known::Rfc3339;
 
 mod advanced_settings;
+mod ai;
 mod blocks;
 mod db;
 mod dotfiles;
@@ -19,18 +20,18 @@ mod file;
 mod font;
 mod install;
 mod kv;
+mod llmtools_window;
 mod main_window;
 mod menu;
 mod run;
 mod runbooks;
-mod secret;
+mod secret_cache;
 mod shared_state;
 mod shellcheck;
 mod sqlite;
 mod state;
 mod stats;
 mod store;
-mod templates;
 mod util;
 mod workspaces;
 
@@ -46,6 +47,13 @@ use dotfiles::aliases::aliases;
 
 use crate::advanced_settings::AdvancedSettings;
 use crate::menu::TabItem;
+
+// Runtime selection: CEF or Wry
+// Note: MockRuntime is not used because the feat/cef branch has a broken test module
+#[cfg(feature = "cef")]
+use tauri::Cef as BrowserEngine;
+#[cfg(all(not(feature = "cef"), feature = "wry"))]
+use tauri::Wry as BrowserEngine;
 
 #[derive(Debug, serde::Serialize)]
 struct HomeInfo {
@@ -309,7 +317,7 @@ async fn cli_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
-async fn get_app_version(app: AppHandle) -> Result<String, String> {
+async fn get_app_version<R: Runtime>(app: AppHandle<R>) -> Result<String, String> {
     let version = app.package_info().version.to_string();
     Ok(version)
 }
@@ -345,14 +353,17 @@ async fn get_platform_info() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn update_window_menu_tabs(app: AppHandle, tabs: Vec<TabItem>) -> Result<(), String> {
+async fn update_window_menu_tabs<R: Runtime>(
+    app: AppHandle<R>,
+    tabs: Vec<TabItem>,
+) -> Result<(), String> {
     let new_menu = menu::menu(&app, &tabs).map_err(|e| e.to_string())?;
     let _ = app.set_menu(new_menu);
 
     Ok(())
 }
 
-fn backup_databases(app: &App) -> tauri::Result<()> {
+fn backup_databases<R: Runtime>(app: &App<R>) -> tauri::Result<()> {
     let version = app.package_info().version.to_string();
     // This seems like the wrong directory to use, but it's what the SQL plugin uses so ¯\_(ツ)_/¯
     let base_dir = app.path().app_config_dir()?;
@@ -384,7 +395,7 @@ fn backup_databases(app: &App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_window(app: &AppHandle) {
+fn show_window<R: Runtime>(app: &AppHandle<R>) {
     let windows = app.webview_windows();
 
     windows
@@ -395,7 +406,7 @@ fn show_window(app: &AppHandle) {
         .expect("Can't Bring Window to Focus");
 }
 
-async fn apply_runbooks_migrations(app: &AppHandle) -> eyre::Result<()> {
+async fn apply_runbooks_migrations<R: Runtime>(app: &AppHandle<R>) -> eyre::Result<()> {
     let state = app.state::<crate::state::AtuinState>();
     let pool = state.db_instances.get_pool("runbooks").await?;
     sqlx::migrate!("./migrations/runbooks").run(&pool).await?;
@@ -417,7 +428,7 @@ fn main() {
         .debug(Color::Blue)
         .trace(Color::BrightBlack);
 
-    let builder = tauri::Builder::default().plugin(
+    let builder = tauri::Builder::<BrowserEngine>::new().plugin(
         tauri_plugin_log::Builder::new()
             .targets([
                 tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stderr),
@@ -519,10 +530,9 @@ fn main() {
             dotfiles::vars::vars,
             dotfiles::vars::delete_var,
             dotfiles::vars::set_var,
-            secret::save_password,
-            secret::load_password,
-            secret::delete_password,
-            templates::template_str,
+            commands::secrets::save_password,
+            commands::secrets::load_password,
+            commands::secrets::delete_password,
             runbooks::ydoc::save_ydoc_for_runbook,
             runbooks::ydoc::load_ydoc_for_runbook,
             runbooks::runbook::export_atrb,
@@ -540,17 +550,13 @@ fn main() {
             commands::stats::command_stats,
             commands::template::set_template_var,
             commands::template::get_template_var,
-            commands::block_state::set_block_local_state,
-            commands::block_state::get_block_local_state,
-            commands::block_state::get_block_local_state_all,
-            commands::block_state::delete_block_local_state,
-            commands::block_state::delete_block_local_state_all,
             commands::feedback::send_feedback,
             commands::blocks::execute_block,
             commands::blocks::cancel_block_execution,
             commands::blocks::open_document,
             commands::blocks::update_document,
             commands::blocks::get_flattened_block_context,
+            commands::blocks::get_flattened_document_context,
             commands::blocks::get_block_state,
             commands::blocks::notify_block_kv_value_changed,
             commands::blocks::reset_runbook_state,
@@ -558,7 +564,9 @@ fn main() {
             commands::blocks::remove_stored_context_for_document,
             commands::blocks::start_serial_execution,
             commands::blocks::stop_serial_execution,
+            commands::blocks::get_runbook_content,
             commands::events::subscribe_to_events,
+            commands::ssh::list_ssh_keys,
             commands::updates::check_for_updates,
             commands::workspaces::copy_welcome_workspace,
             commands::workspaces::reset_workspaces,
@@ -579,6 +587,19 @@ fn main() {
             commands::workspaces::move_items_between_workspaces,
             commands::audio::list_sounds,
             commands::audio::play_sound,
+            commands::ai::ai_create_session,
+            commands::ai::ai_create_generator_session,
+            commands::ai::ai_subscribe_session,
+            commands::ai::ai_change_model,
+            commands::ai::ai_change_charge_target,
+            commands::ai::ai_change_user,
+            commands::ai::ai_send_message,
+            commands::ai::ai_send_tool_result,
+            commands::ai::ai_cancel_session,
+            commands::ai::ai_destroy_session,
+            commands::ai::ai_send_edit_request,
+            commands::llmtools::llmtools_list_sessions,
+            commands::llmtools::llmtools_subscribe,
             shared_state::get_shared_state_document,
             shared_state::push_optimistic_update,
             shared_state::update_shared_state_document,

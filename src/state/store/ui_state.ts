@@ -60,6 +60,7 @@ export interface AtuinUiState {
   hiddenWorkspaces: Record<string, boolean>;
   sidebarWidth: number;
   sidebarOpen: boolean;
+  aiPanelWidth: number;
   sidebarClickStyle: "link" | "explorer";
   lastSidebarDragInfo: { itemIds: string[]; sourceWorkspaceId: string } | undefined;
   didSidebarSetup: boolean;
@@ -76,6 +77,10 @@ export interface AtuinUiState {
   vimModeEnabled: boolean;
   shellCheckEnabled: boolean;
   shellCheckPath: string;
+  uiScale: number;
+  aiEnabled: boolean;
+  aiShareContext: boolean;
+  openedRunbookAgents: Record<string, boolean>;
 
   setAdvancedSettings: (advancedSettings: AdvancedSettings) => void;
   setAppVersion: (version: string) => void;
@@ -95,6 +100,7 @@ export interface AtuinUiState {
   setShowedUpdatePrompt: (showed: boolean) => void;
   setSidebarWidth: (width: number) => void;
   setSidebarOpen: (open: boolean) => void;
+  setAiPanelWidth: (width: number) => void;
   setSidebarClickStyle: (style: "link" | "explorer") => void;
   setLastSidebarDragInfo: (info?: { itemIds: string[]; sourceWorkspaceId: string }) => void;
   openTab: (url: string, title?: string, icon?: TabIcon) => void;
@@ -122,6 +128,10 @@ export interface AtuinUiState {
   setVimModeEnabled: (enabled: boolean) => void;
   setShellCheckEnabled: (enabled: boolean) => void;
   setShellCheckPath: (path: string) => void;
+  setUiScale: (scale: number) => void;
+  setAiEnabled: (enabled: boolean) => void;
+  setAiShareContext: (enabled: boolean) => void;
+  setOpenedRunbookAgent: (runbookId: string, opened: boolean) => void;
 
   getFolderState: (workspaceId: string) => Option<Record<string, boolean>>;
   toggleFolder: (workspaceId: string, folderId: string) => void;
@@ -138,6 +148,7 @@ export const persistUiKeys: (keyof AtuinUiState)[] = [
   "folderState",
   "sidebarWidth",
   "sidebarOpen",
+  "aiPanelWidth",
   "sidebarClickStyle",
   "lightModeEditorTheme",
   "darkModeEditorTheme",
@@ -146,6 +157,10 @@ export const persistUiKeys: (keyof AtuinUiState)[] = [
   "hiddenWorkspaces",
   "tabs",
   "currentTabId",
+  "uiScale",
+  "aiEnabled",
+  "aiShareContext",
+  "openedRunbookAgents",
 ];
 
 export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): AtuinUiState => ({
@@ -169,6 +184,7 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   hiddenWorkspaces: {},
   sidebarWidth: 250,
   sidebarOpen: true,
+  aiPanelWidth: 400,
   sidebarClickStyle: "link",
   lastSidebarDragInfo: undefined,
   didSidebarSetup: false,
@@ -185,6 +201,10 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   vimModeEnabled: false,
   shellCheckEnabled: false,
   shellCheckPath: "",
+  uiScale: 100,
+  aiEnabled: true,
+  aiShareContext: true,
+  openedRunbookAgents: {},
 
   setAdvancedSettings: (advancedSettings: AdvancedSettings) =>
     set(() => ({ advancedSettings: advancedSettings })),
@@ -207,6 +227,7 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   setShowedUpdatePrompt: (showed: boolean) => set(() => ({ showedUpdatePrompt: showed })),
   setSidebarWidth: (width: number) => set(() => ({ sidebarWidth: width })),
   setSidebarOpen: (open: boolean) => set(() => ({ sidebarOpen: open })),
+  setAiPanelWidth: (width: number) => set(() => ({ aiPanelWidth: width })),
   setSidebarClickStyle: (style: "link" | "explorer") => set(() => ({ sidebarClickStyle: style })),
   setLastSidebarDragInfo: (info?: { itemIds: string[]; sourceWorkspaceId: string }) =>
     set(() => ({ lastSidebarDragInfo: info })),
@@ -318,43 +339,40 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
     }
   },
   setTabTitle: (id: string, title: string) => {
-    const tabs = get().tabs;
-    const tab = tabs.find((tab) => tab.id === id);
-    if (tab) {
-      tab.title = title;
-      set(() => ({ tabs: tabs }));
-    }
+    set((state) => ({
+      tabs: state.tabs.map((tab) => (tab.id === id ? { ...tab, title } : tab)),
+    }));
   },
 
   setTabPtyCount: (id: string, ptyCount: number) => {
-    const tabs = get().tabs;
-    const tab = tabs.find((tab) => tab.id === id);
-    if (tab) {
-      console.log("setTabPtyCount", id, ptyCount);
-      tab.ptyCount = ptyCount;
-      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
-      console.log("setTabPtyCount", tab.badge);
-      set(() => ({ tabs: tabs }));
-    }
+    set((state) => ({
+      tabs: state.tabs.map((tab) => {
+        if (tab.id !== id) return tab;
+        const badge = tab.badgeCount + ptyCount > 0 ? String(tab.badgeCount + ptyCount) : null;
+        return { ...tab, ptyCount, badge };
+      }),
+    }));
   },
 
   incrementTabBadgeCount: (id: string, count: number) => {
-    const tabs = get().tabs;
-    const tab = tabs.find((tab) => tab.id === id);
-    if (tab) {
-      tab.badgeCount = tab.badgeCount + count;
-      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
-      set(() => ({ tabs: tabs }));
-    }
+    set((state) => ({
+      tabs: state.tabs.map((tab) => {
+        if (tab.id !== id) return tab;
+        const badgeCount = tab.badgeCount + count;
+        const badge = badgeCount + tab.ptyCount > 0 ? String(badgeCount + tab.ptyCount) : null;
+        return { ...tab, badgeCount, badge };
+      }),
+    }));
   },
   decrementTabBadgeCount: (id: string, count: number) => {
-    const tabs = get().tabs;
-    const tab = tabs.find((tab) => tab.id === id);
-    if (tab) {
-      tab.badgeCount = tab.badgeCount - count;
-      tab.badge = tab.badgeCount + tab.ptyCount > 0 ? String(tab.badgeCount + tab.ptyCount) : null;
-      set(() => ({ tabs: tabs }));
-    }
+    set((state) => ({
+      tabs: state.tabs.map((tab) => {
+        if (tab.id !== id) return tab;
+        const badgeCount = tab.badgeCount - count;
+        const badge = badgeCount + tab.ptyCount > 0 ? String(badgeCount + tab.ptyCount) : null;
+        return { ...tab, badgeCount, badge };
+      }),
+    }));
   },
   advanceActiveTab: (amount: number) => {
     const tabs = get().tabs;
@@ -438,6 +456,18 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   setVimModeEnabled: (enabled: boolean) => set(() => ({ vimModeEnabled: enabled })),
   setShellCheckEnabled: (enabled: boolean) => set(() => ({ shellCheckEnabled: enabled })),
   setShellCheckPath: (path: string) => set(() => ({ shellCheckPath: path })),
+  setUiScale: (scale: number) => set(() => ({ uiScale: scale })),
+  setAiEnabled: (enabled: boolean) => set(() => ({ aiEnabled: enabled })),
+  setAiShareContext: (enabled: boolean) => set(() => ({ aiShareContext: enabled })),
+  setOpenedRunbookAgent: (runbookId: string, opened: boolean) => {
+    const current = { ...get().openedRunbookAgents };
+    if (opened) {
+      current[runbookId] = true;
+    } else {
+      delete current[runbookId];
+    }
+    set(() => ({ openedRunbookAgents: current }));
+  },
 
   getFolderState: (workspaceId: string) => Some(get().folderState[workspaceId]),
   toggleFolder: (workspaceId: string, folderId: string) => {
@@ -453,12 +483,13 @@ export const createUiState: StateCreator<AtuinUiState> = (set, get, _store): Atu
   },
   toggleWorkspaceVisibility: (workspaceId: string) => {
     set((state) => {
-      if (state.hiddenWorkspaces[workspaceId]) {
-        delete state.hiddenWorkspaces[workspaceId];
+      const newHiddenWorkspaces = { ...state.hiddenWorkspaces };
+      if (newHiddenWorkspaces[workspaceId]) {
+        delete newHiddenWorkspaces[workspaceId];
       } else {
-        state.hiddenWorkspaces[workspaceId] = true;
+        newHiddenWorkspaces[workspaceId] = true;
       }
-      return state;
+      return { hiddenWorkspaces: newHiddenWorkspaces };
     });
   },
   // updateFolderState: (workspaceId: string, state: Record<string, boolean>) => {

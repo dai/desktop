@@ -18,10 +18,22 @@ import Postgres from "./blocks/Postgres/Postgres";
 import MySQL from "./blocks/MySQL/MySQL";
 import Clickhouse from "./blocks/Clickhouse/Clickhouse";
 import { HttpBlockSpec } from "@/lib/blocks/http";
+import { GitHubPreviewBlockSpec } from "@/lib/blocks/github-preview";
+import { CodebergPreviewBlockSpec } from "@/lib/blocks/codeberg-preview";
+import { GitLabPreviewBlockSpec } from "@/lib/blocks/gitlab-preview";
 import { LocalDirectoryBlockSpec } from "@/lib/blocks/localdirectory";
+import { linkPreviewPasteHandler } from "@/lib/blocks/link-preview";
+
+// Import to register link preview handlers (side effect)
+import "@/lib/blocks/github-preview/paste-handler";
+import "@/lib/blocks/codeberg-preview/paste-handler";
+import "@/lib/blocks/gitlab-preview/paste-handler";
 import Script from "./blocks/Script/Script";
 import SshConnect from "./blocks/ssh/SshConnect";
 import HostSelect from "./blocks/Host";
+import Pause from "./blocks/Pause";
+import SubRunbook from "./blocks/SubRunbook";
+import TableOfContents from "./blocks/TableOfContents";
 
 import { randomColor } from "@/lib/colors";
 import PhoenixProvider from "@/lib/phoenix_provider";
@@ -54,6 +66,7 @@ export const schema = BlockNoteSchema.create({
     markdown_render: MarkdownRender(),
     "local-var": LocalVar(),
     dropdown: Dropdown(),
+    "sub-runbook": SubRunbook(),
 
     // Monitoring
     prometheus: Prometheus(),
@@ -72,6 +85,15 @@ export const schema = BlockNoteSchema.create({
     // Misc
     editor: CodeEditor(),
     horizontal_rule: HorizontalRule(),
+    table_of_contents: TableOfContents(),
+
+    // Workflow control
+    pause: Pause(),
+
+    // Link Previews
+    githubPreview: GitHubPreviewBlockSpec(),
+    codebergPreview: CodebergPreviewBlockSpec(),
+    gitlabPreview: GitLabPreviewBlockSpec(),
   },
   inlineContentSpecs: {
     // Adds all default inline content.
@@ -94,6 +116,7 @@ export function createBasicEditor(content: any) {
 export function createLocalOnlyEditor(content: any) {
   let editor = BlockNoteEditor.create({
     schema,
+    pasteHandler: linkPreviewPasteHandler,
     _tiptapOptions: {
       editorProps: {
         scrollThreshold: 200,
@@ -118,6 +141,7 @@ export function createCollaborativeEditor(
   presenceColor = presenceColor || randomColor();
   let editor = BlockNoteEditor.create({
     schema,
+    pasteHandler: linkPreviewPasteHandler,
     _tiptapOptions: {
       editorProps: {
         scrollThreshold: 200,

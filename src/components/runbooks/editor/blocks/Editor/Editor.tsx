@@ -2,6 +2,8 @@ import { useEffect, useState, useMemo } from "react";
 
 // @ts-ignore
 import { createReactBlockSpec } from "@blocknote/react";
+import undent from "undent";
+import AIBlockRegistry from "@/lib/ai/block_registry";
 
 import * as LanguageData from "@codemirror/language-data";
 import EditorBlockType from "@/lib/workflow/blocks/editor.ts";
@@ -44,8 +46,8 @@ import Block from "@/lib/blocks/common/Block";
 import { setTemplateVar } from "@/state/templates";
 import { exportPropMatter, cn } from "@/lib/utils";
 import { useCurrentRunbookId } from "@/context/runbook_id_context";
-import { useBlockLocalState } from "@/lib/hooks/useBlockLocalState";
-import { createBlockNoteExtension } from "@blocknote/core";
+import { useBlockKvValue } from "@/lib/hooks/useKvValue";
+import type { Extension as BlockNoteExtension } from "@blocknote/core";
 import { useBlockContext } from "@/lib/hooks/useDocumentBridge";
 
 interface LanguageLoader {
@@ -131,6 +133,29 @@ const EditorBlock = ({
       .toSorted((a, b) => a.name.localeCompare(b.name));
   }, [languages, filterText]);
 
+  function handleCopyFromVarChange(e: any) {
+    setCopyFromVar(e.currentKey ?? null);
+  }
+
+  function handleApplyCopyFromVar() {
+    if (copyFromVar) {
+      onChange(context.variables[copyFromVar] || "");
+      setCopyFromVar(null);
+    }
+  }
+
+  function handleVariableNameInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    onVariableNameChange(e.target.value);
+  }
+
+  function handleToggleCollapseCode() {
+    setCollapseCode(!collapseCode);
+  }
+
+  function handleFilterTextChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setFilterText(e.target.value);
+  }
+
   useEffect(() => {
     (async () => {
       if (!selected) return;
@@ -181,7 +206,7 @@ const EditorBlock = ({
                         variant="flat"
                         placeholder="Select variable"
                         value={variableName}
-                        onSelectionChange={(e) => setCopyFromVar(e.currentKey ?? null)}
+                        onSelectionChange={handleCopyFromVarChange}
                         disabled={!isEditable}
                       >
                         {variables
@@ -195,12 +220,7 @@ const EditorBlock = ({
                         size="sm"
                         variant="flat"
                         isDisabled={!copyFromVar}
-                        onPress={() => {
-                          if (copyFromVar) {
-                            onChange(context.variables[copyFromVar] || "");
-                            setCopyFromVar(null);
-                          }
-                        }}
+                        onPress={handleApplyCopyFromVar}
                       >
                         Apply
                       </Button>
@@ -216,13 +236,13 @@ const EditorBlock = ({
                 size="sm"
                 placeholder="Variable"
                 value={variableName}
-                onChange={(e) => onVariableNameChange(e.target.value)}
+                onChange={handleVariableNameInputChange}
                 disabled={!isEditable}
                 className="font-mono text-xs"
               />
               <Tooltip content={collapseCode ? "Expand code" : "Collapse code"}>
                 <Button
-                  onPress={() => setCollapseCode(!collapseCode)}
+                  onPress={handleToggleCollapseCode}
                   size="sm"
                   variant="flat"
                   isIconOnly
@@ -263,7 +283,7 @@ const EditorBlock = ({
                       type="text"
                       placeholder="Filter languages..."
                       value={filterText}
-                      onChange={(e) => setFilterText(e.target.value)}
+                      onChange={handleFilterTextChange}
                       className="w-full"
                       onClick={(e) => e.stopPropagation()}
                       disabled={!isEditable}
@@ -339,7 +359,7 @@ export default createReactBlockSpec(
     // @ts-ignore
     render: ({ block, editor, code, type }) => {
       const currentRunbookId = useCurrentRunbookId();
-      const [collapseCode, setCollapseCode] = useBlockLocalState<boolean>(
+      const [collapseCode, setCollapseCode] = useBlockKvValue<boolean>(
         block.id,
         "collapsed",
         false,
@@ -412,7 +432,7 @@ export default createReactBlockSpec(
     },
   },
   [
-    createBlockNoteExtension({
+    {
       key: "editor-shortcut",
       inputRules: [
         {
@@ -422,7 +442,7 @@ export default createReactBlockSpec(
           },
         },
       ],
-    }),
+    } as BlockNoteExtension,
   ],
 );
 
@@ -451,4 +471,36 @@ export const insertEditor = (schema: any) => (editor: typeof schema.BlockNoteEdi
   icon: <CodeIcon size={18} />,
   group: "Misc",
   aliases: ["code"],
+});
+
+AIBlockRegistry.getInstance().addBlock({
+  typeName: "editor",
+  friendlyName: "Editor",
+  shortDescription:
+    "A syntax-highlighted code editor for viewing and editing code.",
+  description: undent`
+    Editor blocks provide a syntax-highlighted code editor with language selection. The content can optionally be stored in a template variable.
+
+    The available props are:
+    - name (string): The display name of the block
+    - code (string): The code content
+    - language (string): The syntax highlighting language (e.g., "javascript", "python", "json")
+    - variableName (string): Optional variable name to store the editor contents
+
+    TEMPLATE VARIABLE ACCESS:
+    When variableName is set, the editor's content is available as {{ var.variableName }} in other blocks.
+    This allows using editor content as input to scripts, HTTP bodies, etc.
+
+    Can also be inserted by typing "\`\`\`" on an empty line.
+
+    Example: {
+      "type": "editor",
+      "props": {
+        "name": "Config File",
+        "language": "json",
+        "code": "{\\"key\\": \\"value\\"}",
+        "variableName": "config_content"
+      }
+    }
+  `,
 });

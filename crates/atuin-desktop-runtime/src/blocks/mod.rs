@@ -19,6 +19,7 @@ pub(crate) mod local_directory;
 pub(crate) mod local_var;
 pub(crate) mod markdown_render;
 pub(crate) mod mysql;
+pub(crate) mod pause;
 pub(crate) mod postgres;
 pub(crate) mod prometheus;
 pub(crate) mod query_block;
@@ -26,6 +27,8 @@ pub(crate) mod script;
 pub(crate) mod sql_block;
 pub(crate) mod sqlite;
 pub(crate) mod ssh_connect;
+
+pub(crate) mod sub_runbook;
 pub(crate) mod terminal;
 pub(crate) mod var;
 pub(crate) mod var_display;
@@ -35,9 +38,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub use query_block::{BlockExecutionError, QueryBlockBehavior, QueryBlockError};
-pub use script::ScriptOutput;
 pub use sql_block::{
-    SqlBlockBehavior, SqlBlockError, SqlBlockExecutionResult, SqlQueryResult, SqlStatementResult,
+    SqlBlockBehavior, SqlBlockError, SqlBlockExecutionResult, SqlBlockOutput, SqlQueryResult,
+    SqlStatementResult,
 };
 
 use crate::{
@@ -156,6 +159,8 @@ pub enum Block {
     MarkdownRender(markdown_render::MarkdownRender),
     Editor(editor::Editor),
     Dropdown(dropdown::Dropdown),
+    Pause(pause::Pause),
+    SubRunbook(sub_runbook::SubRunbook),
 }
 
 impl Block {
@@ -183,6 +188,27 @@ impl Block {
             Block::MarkdownRender(markdown_render) => markdown_render.id,
             Block::Editor(editor) => editor.id,
             Block::Dropdown(dropdown) => dropdown.id,
+            Block::Pause(pause) => pause.id,
+            Block::SubRunbook(sub_runbook) => sub_runbook.id,
+        }
+    }
+
+    /// If this is an SshConnect block, returns the parsed host info: (user, host, port).
+    /// This is used to disconnect SSH connections when authentication settings change.
+    pub fn ssh_connect_host_info(&self) -> Option<(Option<String>, String, Option<u16>)> {
+        match self {
+            Block::SshConnect(ssh_connect) => {
+                // If explicit hostname is set, use that
+                if let Some(ref hostname) = ssh_connect.hostname {
+                    Some((ssh_connect.user.clone(), hostname.clone(), ssh_connect.port))
+                } else if !ssh_connect.user_host.is_empty() {
+                    // Parse from user_host string
+                    Some(ssh_connect.parse_user_host())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -211,6 +237,8 @@ impl Block {
             Block::Host(_) => "".to_string(),
             Block::VarDisplay(_) => "".to_string(),
             Block::MarkdownRender(_) => "".to_string(),
+            Block::Pause(_) => "".to_string(),
+            Block::SubRunbook(sub_runbook) => sub_runbook.name.clone(),
         }
     }
 
@@ -272,6 +300,10 @@ impl Block {
             )),
             "editor" => Ok(Block::Editor(editor::Editor::from_document(block_data)?)),
             "dropdown" => Ok(Block::Dropdown(dropdown::Dropdown::from_document(
+                block_data,
+            )?)),
+            "pause" => Ok(Block::Pause(pause::Pause::from_document(block_data)?)),
+            "sub-runbook" => Ok(Block::SubRunbook(sub_runbook::SubRunbook::from_document(
                 block_data,
             )?)),
             _ => Err(format!("Unknown block type: {}", block_type)),
@@ -389,6 +421,16 @@ impl Block {
                     .passive_context(resolver, block_local_value_provider)
                     .await
             }
+            Block::Pause(pause) => {
+                pause
+                    .passive_context(resolver, block_local_value_provider)
+                    .await
+            }
+            Block::SubRunbook(sub_runbook) => {
+                sub_runbook
+                    .passive_context(resolver, block_local_value_provider)
+                    .await
+            }
         }
     }
 
@@ -415,6 +457,8 @@ impl Block {
             Block::MarkdownRender(markdown_render) => markdown_render.create_state(),
             Block::Editor(editor) => editor.create_state(),
             Block::Dropdown(dropdown) => dropdown.create_state(),
+            Block::Pause(pause) => pause.create_state(),
+            Block::SubRunbook(sub_runbook) => sub_runbook.create_state(),
         }
     }
 
@@ -450,6 +494,8 @@ impl Block {
             Block::MarkdownRender(markdown_render) => markdown_render.execute(context).await,
             Block::Editor(editor) => editor.execute(context).await,
             Block::Dropdown(dropdown) => dropdown.execute(context).await,
+            Block::Pause(pause) => pause.execute(context).await,
+            Block::SubRunbook(sub_runbook) => sub_runbook.execute(context).await,
         }
     }
 }

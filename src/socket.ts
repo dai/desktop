@@ -11,7 +11,7 @@ export default class SocketManager extends Emittery {
   private static instance: SocketManager;
   private handlers: MessageRef[] = [];
   private store: typeof useStore;
-  private socket: Socket;
+  private socket: Option<Socket> = None;
 
   static get() {
     if (!SocketManager.instance) {
@@ -32,9 +32,9 @@ export default class SocketManager extends Emittery {
   constructor(apiToken: string | null) {
     super();
     this.store = useStore;
-    this.socket = this.buildSocket(apiToken);
-    this.setupHandlers();
     if (apiToken) {
+      this.socket = Some(this.buildSocket(apiToken));
+      this.setupHandlers(this.socket.unwrap());
       this.connect();
     } else {
       this.store.getState().setConnectedToHubSocket(false);
@@ -54,7 +54,7 @@ export default class SocketManager extends Emittery {
       // Defer the callback to allow other handlers to be set up
       // before handling the connection event.
       setTimeout(() => {
-        callback(this.socket);
+        callback(this.socket.expect("isConnected returned true but socket is None"));
       }, 0);
     }
 
@@ -70,33 +70,36 @@ export default class SocketManager extends Emittery {
   }
 
   public isConnected() {
-    return this.socket.isConnected();
+    return this.socket.map((socket) => socket.isConnected()).unwrapOr(false);
   }
 
   private putNewApiToken(token: string | null) {
     logger.info("Preparing new Socket with updated token");
     const newSocket = this.buildSocket(token);
-    const previouslyConnected = this.socket.isConnected();
-    this.socket.disconnect();
-    this.cleanupHandlers();
+    const previouslyConnected = this.socket.map((socket) => socket.isConnected()).unwrapOr(false);
+    this.socket.map((socket) => socket.disconnect());
+    this.socket.map((socket) => this.cleanupHandlers(socket));
 
-    this.socket = newSocket;
-    this.setupHandlers();
+    this.socket = Some(newSocket);
+    this.setupHandlers(this.socket.unwrap());
 
     if (token) {
       this.connect();
     } else if (previouslyConnected) {
       this.store.getState().setConnectedToHubSocket(false);
-      this.emit("disconnect", this.socket);
+      this.socket.map((socket) => this.emit("disconnect", socket));
     }
-    this.emit("socketchange", this.socket);
+    this.socket.map((socket) => this.emit("socketchange", socket));
   }
 
   private connect() {
+    if (this.socket.isNone()) {
+      return;
+    }
     logger.debug(
       `Connecting to Atuin Hub with token: ${SocketManager.apiToken!.substring(0, 12)}...`,
     );
-    this.socket.connect();
+    this.socket.map((socket) => socket.connect());
   }
 
   private buildSocket(apiToken: string | null) {
@@ -107,23 +110,23 @@ export default class SocketManager extends Emittery {
     });
   }
 
-  private setupHandlers() {
+  private setupHandlers(socket: Socket) {
     this.handlers.push(
-      this.socket.onOpen(() => {
+      socket.onOpen(() => {
         this.store.getState().setConnectedToHubSocket(true);
-        this.emit("connect", this.socket);
+        this.socket.map((socket) => this.emit("connect", socket));
       }),
     );
     this.handlers.push(
-      this.socket.onClose(() => {
+      socket.onClose(() => {
         this.store.getState().setConnectedToHubSocket(false);
-        this.emit("disconnect", this.socket);
+        this.socket.map((socket) => this.emit("disconnect", socket));
       }),
     );
   }
 
-  private cleanupHandlers() {
-    this.socket.off(this.handlers);
+  private cleanupHandlers(socket: Socket) {
+    socket.off(this.handlers);
     this.handlers = [];
   }
 }
@@ -145,7 +148,12 @@ export class WrappedChannel<J = unknown> {
     this.topic = topic;
     this.emitter = new Emittery();
     this.channelParams = channelParams;
-    this.channel = this.manager.getSocket().channel(topic, channelParams);
+    this.channel = this.manager
+      .getSocket()
+      .map((socket) => socket.channel(topic, channelParams))
+      .expect(
+        "Tried to create channel with no socket; wait for SocketManager `onConnect` or `onSocketChange` before creating channels",
+      );
 
     this.manager.onSocketChange(this.handleNewSocket.bind(this));
   }
@@ -216,12 +224,16 @@ export class WrappedChannel<J = unknown> {
   }
 
   private resetChannel() {
-    this.handleNewSocket(this.manager.getSocket());
+    if (this.manager.getSocket().isNone()) {
+      return;
+    }
+
+    this.handleNewSocket(this.manager.getSocket().unwrap());
   }
 
   public leave(timeout?: number) {
     const push = this.channel.leave(timeout);
-    return new WrappedPush(push);
+    return new WrappedPush(Promise.resolve(push));
   }
 
   public on(event: string, callback: (response?: any) => void) {
@@ -259,8 +271,11 @@ export class WrappedChannel<J = unknown> {
       data = data.buffer;
     }
 
-    const push = this.channel.push(event, data, timeout);
-    return new WrappedPush(push);
+    const pushPromise = this.ensureJoined().then(() => {
+      return this.channel.push(event, data, timeout);
+    });
+
+    return new WrappedPush(pushPromise);
   }
 
   public get state() {
@@ -272,6 +287,7 @@ export class WrappedChannel<J = unknown> {
     const oldChannel = this.channel;
     this.channel = socket.channel(this.topic, this.channelParams);
     this.joinFailed = false;
+    this.joinPromise = null;
 
     this.handlers.forEach(({ ref }, event) => {
       oldChannel.off(event, ref);
@@ -282,23 +298,27 @@ export class WrappedChannel<J = unknown> {
 }
 
 export class WrappedPush {
-  private push: Push;
+  private pushPromise: Promise<Push>;
 
-  constructor(push: Push) {
-    this.push = push;
+  constructor(pushPromise: Promise<Push>) {
+    this.pushPromise = pushPromise;
+    // Prevent unhandled rejection for fire-and-forget pushes
+    this.pushPromise.catch(() => {});
   }
 
-  receive<T = any>(): Promise<T> {
+  async receive<T = any>(): Promise<T> {
+    const push = await this.pushPromise;
     return new Promise<T>((resolve, reject) => {
-      this.push
+      push
         .receive("ok", (data: T) => resolve(data))
         .receive("error", (error: any) => reject(error));
     });
   }
 
-  receiveBin(): Promise<Uint8Array> {
+  async receiveBin(): Promise<Uint8Array> {
+    const push = await this.pushPromise;
     return new Promise((resolve, reject) => {
-      this.push
+      push
         .receive("ok", (data: ArrayBuffer) => resolve(new Uint8Array(data)))
         .receive("error", (error: any) => reject(error));
     });

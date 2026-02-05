@@ -4,7 +4,7 @@ import { autobind } from "../decorators";
 import Emittery from "emittery";
 import { DocumentBridgeMessage } from "@/rs-bindings/DocumentBridgeMessage";
 import { ResolvedContext } from "@/rs-bindings/ResolvedContext";
-import { BlockOutput } from "@/rs-bindings/BlockOutput";
+import { StreamingBlockOutput } from "@/rs-bindings/StreamingBlockOutput";
 import Logger from "../logger";
 import { cancelExecution, executeBlock } from "../runtime";
 import { JsonValue } from "@/rs-bindings/serde_json/JsonValue";
@@ -19,7 +19,7 @@ export default function useDocumentBridge(): DocumentBridge | null {
 export type BlockContext = {};
 
 export type Omit<T, K> = Pick<T, Exclude<keyof T, K>>;
-export type GenericBlockOutput<T = JsonValue> = Omit<BlockOutput, "object"> &
+export type GenericBlockOutput<T = JsonValue> = Omit<StreamingBlockOutput, "object"> &
   Partial<{
     object?: T;
   }>;
@@ -75,6 +75,12 @@ export class DocumentBridge {
     });
   }
 
+  public getLastBlockContext(): Promise<ResolvedContext> {
+    return invoke("get_flattened_document_context", {
+      documentId: this.runbookId,
+    });
+  }
+
   public getBlockState<T = JsonValue>(blockId: string): Promise<T> {
     return invoke("get_block_state", {
       documentId: this.runbookId,
@@ -106,7 +112,7 @@ const DEFAULT_CONTEXT: ResolvedContext = {
   sshHost: null,
 };
 
-export function useBlockContext(blockId: string): ResolvedContext {
+export function useBlockContext(blockId: string, suppressErrors: boolean = false): ResolvedContext {
   const [context, setContext] = useState<ResolvedContext | null>(null);
 
   const documentBridge = useDocumentBridge();
@@ -115,9 +121,16 @@ export function useBlockContext(blockId: string): ResolvedContext {
       return;
     }
 
-    documentBridge.getBlockContext(blockId).then((context) => {
-      setContext(context);
-    });
+    documentBridge
+      .getBlockContext(blockId)
+      .then((context) => {
+        setContext(context);
+      })
+      .catch((error) => {
+        if (!suppressErrors) {
+          throw error;
+        }
+      });
 
     return documentBridge.onBlockContextUpdate(blockId, (context) => {
       setContext(context);
@@ -130,6 +143,7 @@ export function useBlockContext(blockId: string): ResolvedContext {
 export function useBlockOutput<T = JsonValue>(
   blockId: string,
   callback: (output: GenericBlockOutput<T>) => void,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): void {
   const documentBridge = useDocumentBridge();
   useEffect(() => {
@@ -168,6 +182,8 @@ export type ExecutionLifecycle = "idle" | "running" | "success" | "error" | "can
 
 export interface ClientExecutionHandle {
   isRunning: boolean;
+  isStarting: boolean;
+  isStopping: boolean;
   isSuccess: boolean;
   isError: boolean;
   isCancelled: boolean;
@@ -185,6 +201,8 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
   const [lifecycle, setLifecycle] = useState<ExecutionLifecycle>("idle");
   const [error, setError] = useState<string | null>(null);
   const [executionId, setExecutionId] = useState<string | null>(null);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
 
   const startExecution = useCallback(async () => {
     if (!documentBridge) {
@@ -196,6 +214,7 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
       return;
     }
 
+    setIsStarting(true);
     setError(null);
     documentBridge.logger.info(
       `Starting execution of block ${blockId} in runbook ${documentBridge.runbookId}`,
@@ -205,6 +224,7 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
     try {
       executionId = await executeBlock(documentBridge.runbookId, blockId);
     } catch (error) {
+      setIsStarting(false);
       documentBridge.logger.warn(
         `Failed to execute block ${blockId} in runbook ${documentBridge.runbookId} (block should send a BlockOutput with lifecycle set to error)`,
         error,
@@ -241,10 +261,16 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
       return;
     }
 
+    setIsStopping(true);
     documentBridge.logger.info(
       `Cancelling execution of block ${blockId} in runbook ${documentBridge.runbookId} with execution ID: ${executionId}`,
     );
-    await cancelExecution(executionId);
+    try {
+      await cancelExecution(executionId);
+    } catch (error) {
+      setIsStopping(false);
+      documentBridge.logger.error("Failed to cancel execution", error);
+    }
     setExecutionId(null);
     setError(null);
   }, [documentBridge, blockId, executionId, lifecycle]);
@@ -255,23 +281,39 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
         setLifecycle("success");
         setExecutionId(null);
         setError(null);
+        setIsStarting(false);
+        setIsStopping(false);
         break;
       case "cancelled":
         setLifecycle("cancelled");
         setExecutionId(null);
         setError(null);
+        setIsStarting(false);
+        setIsStopping(false);
         break;
       case "error":
         setLifecycle("error");
         setExecutionId(null);
         setError(output.lifecycle?.data.message);
+        setIsStarting(false);
+        setIsStopping(false);
         break;
       case "started":
         setLifecycle("running");
+        setIsStarting(false);
         if (output.lifecycle?.data) {
           setExecutionId(output.lifecycle.data);
         }
         setError(null);
+        break;
+      case "paused":
+        // Paused is treated like success - the block completed its work
+        // (which was to pause the workflow)
+        setLifecycle("success");
+        setExecutionId(null);
+        setError(null);
+        setIsStarting(false);
+        setIsStopping(false);
         break;
 
       default:
@@ -286,6 +328,8 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
 
   return {
     isRunning: lifecycle === "running",
+    isStarting,
+    isStopping,
     isSuccess: lifecycle === "success",
     isError: lifecycle === "error",
     isCancelled: lifecycle === "cancelled",
@@ -296,6 +340,8 @@ export function useBlockExecution(blockId: string): ClientExecutionHandle {
       setLifecycle("idle");
       setError(null);
       setExecutionId(null);
+      setIsStarting(false);
+      setIsStopping(false);
     },
   };
 }

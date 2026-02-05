@@ -6,14 +6,11 @@ const PROMETHEUS_URL_KEY = "settings.runbooks.prometheus_url";
 const TERMINAL_FONT = "settings.runbooks.terminal.font";
 const TERMINAL_FONT_SIZE = "settings.runbooks.terminal.font_size";
 const TERMINAL_GL = "settings.runbooks.terminal.gl";
+const TERMINAL_GHOSTTY = "settings.runbooks.terminal.ghostty";
 const TERMINAL_SHELL = "settings.runbooks.terminal.shell";
 const SCRIPT_SHELL = "settings.runbooks.script.shell";
 const SCRIPT_INTERPRETERS = "settings.runbooks.script.interpreters";
 const EDITOR_VIM_MODE = "settings.editor.vim_mode";
-const AI_ENABLED = "settings.ai.enabled";
-const AI_API_KEY = "settings.ai.api_key";
-const AI_API_ENDPOINT = "settings.ai.api_endpoint";
-const AI_MODEL = "settings.ai.model";
 const SHELLCHECK_ENABLED = "settings.editor.shellcheck.enabled";
 const SHELLCHECK_PATH = "settings.editor.shellcheck.path";
 
@@ -38,6 +35,12 @@ const NOTIFICATIONS_SERIAL_FINISHED_OS = "settings.notifications.serial.finished
 const NOTIFICATIONS_SERIAL_FAILED_DURATION = "settings.notifications.serial.failed.duration";
 const NOTIFICATIONS_SERIAL_FAILED_SOUND = "settings.notifications.serial.failed.sound";
 const NOTIFICATIONS_SERIAL_FAILED_OS = "settings.notifications.serial.failed.os";
+
+const NOTIFICATIONS_SERIAL_PAUSED_DURATION = "settings.notifications.serial.paused.duration";
+const NOTIFICATIONS_SERIAL_PAUSED_SOUND = "settings.notifications.serial.paused.sound";
+const NOTIFICATIONS_SERIAL_PAUSED_OS = "settings.notifications.serial.paused.os";
+
+const AI_AGENT_PROVIDER = "settings.ai.agent.provider";
 
 export class Settings {
   public static DEFAULT_FONT = "FiraCode";
@@ -87,6 +90,17 @@ export class Settings {
     return (await store.get(TERMINAL_GL)) || false;
   }
 
+  public static async terminalGhostty(val: boolean | null = null): Promise<boolean> {
+    let store = await KVStore.open_default();
+
+    if (val !== null) {
+      await store.set(TERMINAL_GHOSTTY, val);
+      return val;
+    }
+
+    return (await store.get(TERMINAL_GHOSTTY)) || false;
+  }
+
   public static async terminalShell(val: string | null = null): Promise<string | null> {
     let store = await KVStore.open_default();
 
@@ -133,50 +147,6 @@ export class Settings {
     }
 
     return (await store.get(EDITOR_VIM_MODE)) || false;
-  }
-
-  public static async aiEnabled(val: boolean | null = null): Promise<boolean> {
-    let store = await KVStore.open_default();
-
-    if (val !== null) {
-      await store.set(AI_ENABLED, val);
-      return val;
-    }
-
-    return (await store.get(AI_ENABLED)) || false;
-  }
-
-  public static async aiApiKey(val: string | null = null): Promise<string | null> {
-    let store = await KVStore.open_default();
-
-    if (val || val === "") {
-      await store.set(AI_API_KEY, val);
-      return val;
-    }
-
-    return await store.get(AI_API_KEY);
-  }
-
-  public static async aiApiEndpoint(val: string | null = null): Promise<string | null> {
-    let store = await KVStore.open_default();
-
-    if (val || val === "") {
-      await store.set(AI_API_ENDPOINT, val);
-      return val;
-    }
-
-    return await store.get(AI_API_ENDPOINT);
-  }
-
-  public static async aiModel(val: string | null = null): Promise<string | null> {
-    let store = await KVStore.open_default();
-
-    if (val || val === "") {
-      await store.set(AI_MODEL, val);
-      return val;
-    }
-
-    return await store.get(AI_MODEL);
   }
 
   public static async shellCheckEnabled(val: boolean | null = null): Promise<boolean> {
@@ -375,6 +345,44 @@ export class Settings {
     return (await store.get(NOTIFICATIONS_SERIAL_FAILED_OS)) ?? "always";
   }
 
+  // Serial paused settings
+  public static async notificationsSerialPausedDuration(
+    val: number | null = null,
+  ): Promise<number> {
+    let store = await KVStore.open_default();
+
+    if (val !== null) {
+      await store.set(NOTIFICATIONS_SERIAL_PAUSED_DURATION, val);
+      return val;
+    }
+
+    return (await store.get(NOTIFICATIONS_SERIAL_PAUSED_DURATION)) ?? 0;
+  }
+
+  public static async notificationsSerialPausedSound(val: string | null = null): Promise<string> {
+    let store = await KVStore.open_default();
+
+    if (val !== null) {
+      await store.set(NOTIFICATIONS_SERIAL_PAUSED_SOUND, val);
+      return val;
+    }
+
+    return (await store.get(NOTIFICATIONS_SERIAL_PAUSED_SOUND)) ?? "to_the_point";
+  }
+
+  public static async notificationsSerialPausedOs(
+    val: "always" | "not_focused" | "never" | null = null,
+  ): Promise<"always" | "not_focused" | "never"> {
+    let store = await KVStore.open_default();
+
+    if (val !== null) {
+      await store.set(NOTIFICATIONS_SERIAL_PAUSED_OS, val);
+      return val;
+    }
+
+    return (await store.get(NOTIFICATIONS_SERIAL_PAUSED_OS)) ?? "not_focused";
+  }
+
   public static async getSystemDefaultShell(): Promise<string> {
     try {
       const shellPath = await invoke<string>("get_default_shell");
@@ -400,5 +408,27 @@ export class Settings {
       return userShell;
     }
     return await this.getSystemDefaultShell();
+  }
+
+  public static async aiAgentProvider(val: string | null = null): Promise<string> {
+    let store = await KVStore.open_default();
+
+    if (val !== null) {
+      await store.set(AI_AGENT_PROVIDER, val);
+      return val;
+    }
+
+    return await store.get(AI_AGENT_PROVIDER) ?? "atuinhub";
+  }
+
+  public static async aiProviderSettings<T extends Record<string, any>>(provider: string, settings: T | null = null): Promise<T> {
+    let store = await KVStore.open_default();
+
+    if (settings !== null) {
+      await store.set(`ai.provider.${provider}.settings`, settings);
+      return settings;
+    }
+
+    return await store.get(`ai.provider.${provider}.settings`) ?? {} as T;
   }
 }

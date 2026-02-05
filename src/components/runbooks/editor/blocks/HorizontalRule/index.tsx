@@ -1,6 +1,7 @@
-// @ts-ignore
-import { createBlockNoteExtension } from "@blocknote/core";
+import type { Extension } from "@blocknote/core";
 import { createReactBlockSpec } from "@blocknote/react";
+import undent from "undent";
+import AIBlockRegistry from "@/lib/ai/block_registry";
 
 /**
  * Simple horizontal rule component for visual separation
@@ -33,7 +34,7 @@ export default createReactBlockSpec(
     },
   },
   [
-    createBlockNoteExtension({
+    {
       key: "horizontal-rule-shortcut",
       inputRules: [
         {
@@ -43,6 +44,23 @@ export default createReactBlockSpec(
           },
         },
       ],
-    }),
+    } as Extension,
   ],
 );
+
+AIBlockRegistry.getInstance().addBlock({
+  typeName: "horizontal_rule",
+  friendlyName: "Horizontal Rule",
+  shortDescription:
+    "Inserts a visual separator line.",
+  description: undent`
+    Horizontal Rule blocks insert a visual separator line between sections of a runbook. This block has no configurable props.
+
+    Can also be inserted by typing "---" on an empty line.
+
+    Example: {
+      "type": "horizontal_rule",
+      "props": {}
+    }
+  `,
+});

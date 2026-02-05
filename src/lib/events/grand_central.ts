@@ -10,10 +10,14 @@ export interface GrandCentralEvents {
   "serial-execution-completed": { runbook_id: string };
   "serial-execution-cancelled": { runbook_id: string };
   "serial-execution-failed": { runbook_id: string; error: string };
+  "serial-execution-paused": { runbook_id: string; block_id: string };
   "block-started": { block_id: string; runbook_id: string };
   "block-finished": { block_id: string; runbook_id: string; success: boolean };
   "block-failed": { block_id: string; runbook_id: string; error: string };
   "block-cancelled": { block_id: string; runbook_id: string };
+  "ssh-certificate-load-failed": { host: string; cert_path: string; error: string };
+  "ssh-certificate-expired": { host: string; cert_path: string; valid_until: string };
+  "ssh-certificate-not-yet-valid": { host: string; cert_path: string; valid_from: string };
 }
 
 /**
@@ -130,6 +134,13 @@ export class GrandCentral extends Emittery<GrandCentralEvents> {
           });
           break;
 
+        case "serialExecutionPaused":
+          this.emit("serial-execution-paused", {
+            runbook_id: event.data.runbook_id,
+            block_id: event.data.block_id,
+          });
+          break;
+
         case "blockStarted":
           this.emit("block-started", {
             block_id: event.data.block_id,
@@ -157,6 +168,30 @@ export class GrandCentral extends Emittery<GrandCentralEvents> {
           this.emit("block-cancelled", {
             block_id: event.data.block_id,
             runbook_id: event.data.runbook_id,
+          });
+          break;
+
+        case "sshCertificateLoadFailed":
+          this.emit("ssh-certificate-load-failed", {
+            host: event.data.host,
+            cert_path: event.data.cert_path,
+            error: event.data.error,
+          });
+          break;
+
+        case "sshCertificateExpired":
+          this.emit("ssh-certificate-expired", {
+            host: event.data.host,
+            cert_path: event.data.cert_path,
+            valid_until: event.data.valid_until,
+          });
+          break;
+
+        case "sshCertificateNotYetValid":
+          this.emit("ssh-certificate-not-yet-valid", {
+            host: event.data.host,
+            cert_path: event.data.cert_path,
+            valid_from: event.data.valid_from,
           });
           break;
 
@@ -202,6 +237,10 @@ export const onSerialExecutionFailed = (
   handler: (data: GrandCentralEvents["serial-execution-failed"]) => void,
 ) => grandCentral.on("serial-execution-failed", handler);
 
+export const onSerialExecutionPaused = (
+  handler: (data: GrandCentralEvents["serial-execution-paused"]) => void,
+) => grandCentral.on("serial-execution-paused", handler);
+
 export const onBlockStarted = (
   handler: (data: GrandCentralEvents["block-started"]) => void,
 ) => grandCentral.on("block-started", handler);
@@ -217,3 +256,15 @@ export const onBlockFailed = (
 export const onBlockCancelled = (
   handler: (data: GrandCentralEvents["block-cancelled"]) => void,
 ) => grandCentral.on("block-cancelled", handler);
+
+export const onSshCertificateLoadFailed = (
+  handler: (data: GrandCentralEvents["ssh-certificate-load-failed"]) => void,
+) => grandCentral.on("ssh-certificate-load-failed", handler);
+
+export const onSshCertificateExpired = (
+  handler: (data: GrandCentralEvents["ssh-certificate-expired"]) => void,
+) => grandCentral.on("ssh-certificate-expired", handler);
+
+export const onSshCertificateNotYetValid = (
+  handler: (data: GrandCentralEvents["ssh-certificate-not-yet-valid"]) => void,
+) => grandCentral.on("ssh-certificate-not-yet-valid", handler);

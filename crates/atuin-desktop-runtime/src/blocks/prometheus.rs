@@ -7,6 +7,7 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::blocks::{Block, BlockBehavior, BlockExecutionError, FromDocument, QueryBlockBehavior};
+use crate::context::BlockExecutionOutput;
 use crate::execution::{ExecutionContext, ExecutionHandle};
 
 // Prometheus-specific types for QueryBlockBehavior
@@ -16,20 +17,13 @@ pub type PrometheusConnection = (Client, String, PrometheusTimeRange);
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct PrometheusQueryResult {
-    series: Vec<PrometheusSeries>,
+    /// Columnar data for uPlot: [timestamps, series1_values, series2_values, ...]
+    /// Timestamps are in seconds (Unix epoch)
+    data: Vec<Vec<f64>>,
+    /// Series names in order (index i corresponds to data[i+1])
+    series_names: Vec<String>,
     query_executed: String,
     time_range: PrometheusTimeRange,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct PrometheusSeries {
-    #[serde(rename = "type")]
-    series_type: String,
-    show_symbol: bool,
-    name: String,
-    data: Vec<(f64, f64)>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -39,6 +33,77 @@ pub struct PrometheusTimeRange {
     start: u64,
     end: u64,
     step: u32,
+}
+
+/// Output structure for Prometheus blocks that implements BlockExecutionOutput
+/// for template access to query results.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PrometheusBlockOutput {
+    /// All query results from the Prometheus execution
+    pub results: Vec<PrometheusQueryResult>,
+    /// Total number of series across all results
+    pub total_series: usize,
+}
+
+impl PrometheusBlockOutput {
+    /// Create a new PrometheusBlockOutput from query results
+    pub fn new(results: Vec<PrometheusQueryResult>) -> Self {
+        let total_series = results.iter().map(|r| r.series_names.len()).sum();
+        Self {
+            results,
+            total_series,
+        }
+    }
+
+    /// Get the first result (convenience for single-query access)
+    pub fn first_result(&self) -> Option<&PrometheusQueryResult> {
+        self.results.first()
+    }
+}
+
+impl BlockExecutionOutput for PrometheusBlockOutput {
+    fn get_template_value(&self, key: &str) -> Option<minijinja::Value> {
+        match key {
+            // Primary access
+            "results" => Some(minijinja::Value::from_serialize(&self.results)),
+            "first" => self.first_result().map(minijinja::Value::from_serialize),
+
+            // Aggregated data
+            "total_series" => Some(minijinja::Value::from(self.total_series)),
+            "result_count" => Some(minijinja::Value::from(self.results.len())),
+
+            // Convenience accessors for first result
+            "series_names" => self
+                .first_result()
+                .map(|r| minijinja::Value::from_serialize(&r.series_names)),
+            "data" => self
+                .first_result()
+                .map(|r| minijinja::Value::from_serialize(&r.data)),
+            "query_executed" => self
+                .first_result()
+                .map(|r| minijinja::Value::from(r.query_executed.clone())),
+            "time_range" => self
+                .first_result()
+                .map(|r| minijinja::Value::from_serialize(&r.time_range)),
+
+            _ => None,
+        }
+    }
+
+    fn enumerate_template_keys(&self) -> minijinja::value::Enumerator {
+        minijinja::value::Enumerator::Str(&[
+            "results",
+            "first",
+            "total_series",
+            "result_count",
+            "series_names",
+            "data",
+            "query_executed",
+            "time_range",
+        ])
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -350,7 +415,9 @@ impl QueryBlockBehavior for Prometheus {
             PrometheusBlockError::QueryError("Missing result field in data".to_string())
         })?;
 
-        let mut series = Vec::new();
+        let mut series_names: Vec<String> = Vec::new();
+        let mut all_values: Vec<Vec<f64>> = Vec::new();
+        let mut timestamps: Vec<f64> = Vec::new();
 
         if let Some(result_array) = result.as_array() {
             for series_data in result_array {
@@ -358,6 +425,7 @@ impl QueryBlockBehavior for Prometheus {
                     series_data.get("metric"),
                     series_data.get("values").and_then(|v| v.as_array()),
                 ) {
+                    // Build series name from metric labels
                     let series_name = if let Some(metric_obj) = metric.as_object() {
                         if metric_obj.is_empty() {
                             query.to_string()
@@ -372,36 +440,53 @@ impl QueryBlockBehavior for Prometheus {
                         query.to_string()
                     };
 
-                    let mut data_points = Vec::new();
+                    // Extract timestamps (only from first series - all share same timestamps)
+                    // and values for this series
+                    let mut series_values: Vec<f64> = Vec::new();
                     for value_pair in values {
                         if let Some(pair) = value_pair.as_array() {
                             if pair.len() == 2 {
-                                let timestamp = pair[0].as_f64().unwrap_or(0.0) * 1000.0;
+                                // Timestamps in seconds (uPlot native format)
+                                let ts = pair[0].as_f64().unwrap_or(0.0);
                                 let value = pair[1]
                                     .as_str()
                                     .and_then(|s| s.parse::<f64>().ok())
                                     .unwrap_or(0.0);
-                                data_points.push((timestamp, value));
+
+                                // Only collect timestamps from first series
+                                if series_names.is_empty() {
+                                    timestamps.push(ts);
+                                }
+                                series_values.push(value);
                             }
                         }
                     }
 
-                    series.push(PrometheusSeries {
-                        series_type: "line".to_string(),
-                        show_symbol: false,
-                        name: series_name,
-                        data: data_points,
-                    });
+                    series_names.push(series_name);
+                    all_values.push(series_values);
                 }
             }
         }
 
+        // Build columnar data: [timestamps, series1_values, series2_values, ...]
+        let mut data: Vec<Vec<f64>> = Vec::with_capacity(1 + all_values.len());
+        data.push(timestamps);
+        data.extend(all_values);
+
         let result = PrometheusQueryResult {
-            series,
+            data,
+            series_names,
             query_executed: query.to_string(),
             time_range: time_range.clone(),
         };
 
         Ok(vec![result])
+    }
+
+    fn create_output(
+        &self,
+        results: &[Self::QueryResult],
+    ) -> Option<Box<dyn BlockExecutionOutput>> {
+        Some(Box::new(PrometheusBlockOutput::new(results.to_vec())))
     }
 }

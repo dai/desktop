@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
+import undent from "undent";
+import AIBlockRegistry from "@/lib/ai/block_registry";
 import { ListFilterIcon, CheckIcon, ChevronsUpDownIcon, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,18 +27,7 @@ import InterpreterSelector from "@/lib/blocks/common/InterpreterSelector.tsx";
 import { useBlockExecution, useBlockState } from "@/lib/hooks/useDocumentBridge";
 import isValidVarName from "../../utils/varNames";
 import { DropdownState } from "@/rs-bindings/DropdownState";
-
-// Helper to parse and display option nicely
-const parseOption = (option: string) => {
-  const trimmed = option.trim();
-  const colonIndex = trimmed.indexOf(":");
-  if (colonIndex > 0 && colonIndex < trimmed.length - 1) {
-    const label = trimmed.substring(0, colonIndex).trim(); // what we display
-    const value = trimmed.substring(colonIndex + 1).trim(); // what we store as value
-    return { value, label, hasKeyValue: true };
-  }
-  return { value: trimmed, label: trimmed, hasKeyValue: false };
-};
+import { parseOption } from "./parseOption";
 
 type DropdownOptions = "fixed" | "variable" | "command";
 
@@ -64,6 +55,7 @@ interface DropdownProps {
   optionsType: DropdownOptions;
   value: string;
   interpreter: string;
+  delimiter: string;
   isEditable: boolean;
   editor: any;
   dropdown: any;
@@ -73,15 +65,18 @@ interface DropdownProps {
   onValueUpdate: (value: string) => void;
   onOptionsTypeChange: (optionsType: OptionType) => void;
   onInterpreterChange: (interpreter: string) => void;
+  onDelimiterChange: (delimiter: string) => void;
   onCodeMirrorFocus?: () => void;
 }
 
 const FixedTab = ({
   options,
   onOptionsUpdate,
+  delimiter,
 }: {
   options: string;
   onOptionsUpdate: (options: string) => void;
+  delimiter: string;
 }) => {
   const [optionsList, setOptionsList] = useState<string[]>(() =>
     options ? options.split(",").map((opt) => opt.trim()) : [],
@@ -110,13 +105,13 @@ const FixedTab = ({
   return (
     <div className="space-y-4">
       <div className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-        Add options as simple values or label:value pairs (e.g., "User Friendly
-        Name:horrible-uuid-value")
+        Add options as simple values or label{delimiter}value pairs (e.g., "User Friendly
+        Name{delimiter}horrible-uuid-value")
       </div>
 
       <div className="flex space-x-2">
         <Input
-          placeholder="Simple value or display label:value"
+          placeholder={`Simple value or display label${delimiter}value`}
           value={newOption}
           onChange={(e) => setNewOption(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && addOption()}
@@ -133,7 +128,7 @@ const FixedTab = ({
         ) : (
           <div className="flex flex-wrap gap-2 p-2">
             {optionsList.map((option, index) => {
-              const parsed = parseOption(option);
+              const parsed = parseOption(option, delimiter);
               return (
                 <Badge
                   key={parsed.value}
@@ -169,15 +164,17 @@ const FixedTab = ({
 const VariableTab = ({
   options,
   onOptionsUpdate,
+  delimiter,
 }: {
   options: string;
   onOptionsUpdate: (options: string) => void;
+  delimiter: string;
 }) => {
   return (
     <div className="space-y-4 py-4">
       <div className="text-sm text-gray-600 dark:text-gray-400 mb-2">
-        Variable should contain newline or comma-separated values. Supports label:value pairs (e.g.,
-        "Display Name:id123")
+        Variable should contain newline or comma-separated values. Supports label{delimiter}value pairs (e.g.,
+        "Display Name{delimiter}id123")
       </div>
       <Input
         placeholder="Variable name"
@@ -200,6 +197,7 @@ interface CommandTabProps {
   onOptionsUpdate: (options: string) => void;
   interpreter: string;
   onInterpreterChange: (interpreter: string) => void;
+  delimiter: string;
   onCodeMirrorFocus?: () => void;
 }
 
@@ -209,6 +207,7 @@ const CommandTab = ({
   onOptionsUpdate,
   interpreter,
   onInterpreterChange,
+  delimiter,
   onCodeMirrorFocus,
 }: CommandTabProps) => {
   const colorMode = useStore((state) => state.functionalColorMode);
@@ -220,8 +219,8 @@ const CommandTab = ({
   return (
     <div className="space-y-4 py-4">
       <div className="text-sm text-gray-600 dark:text-gray-400">
-        Enter a shell command that will return a list of options. Supports label:value pairs (e.g.,
-        "User Friendly Name:horrible-uuid-value")
+        Enter a shell command that will return a list of options. Supports label{delimiter}value pairs (e.g.,
+        "User Friendly Name{delimiter}horrible-uuid-value")
       </div>
       <div className="flex justify-between items-center mb-4">
         <InterpreterSelector
@@ -256,11 +255,13 @@ const Dropdown = ({
   value = "",
   optionsType = "fixed",
   interpreter = "bash",
+  delimiter = ":",
   onNameUpdate,
   onOptionsUpdate,
   onValueUpdate,
   onOptionsTypeChange,
   onInterpreterChange,
+  onDelimiterChange,
   isEditable,
   onCodeMirrorFocus,
 }: DropdownProps) => {
@@ -323,7 +324,9 @@ const Dropdown = ({
         ref={() => setExecutionReady(true)}
         className="flex flex-col w-full bg-gradient-to-r from-blue-50 to-cyan-50 dark:from-slate-800 dark:to-cyan-950 rounded-lg p-3 border border-blue-200 dark:border-blue-900 shadow-sm hover:shadow-md transition-all duration-200"
       >
-        <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 mb-2">dropdown</span>
+        <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 mb-2">
+          dropdown
+        </span>
         <div className="flex flex-row items-center space-x-3">
           <div className="flex items-center">
             <Button
@@ -443,12 +446,14 @@ const Dropdown = ({
                       <FixedTab
                         options={options}
                         onOptionsUpdate={optionsChangeHandler(OptionType.FIXED)}
+                        delimiter={delimiter}
                       />
                     </TabsContent>
                     <TabsContent value="variable" className="flex-1 overflow-auto">
                       <VariableTab
                         options={options}
                         onOptionsUpdate={optionsChangeHandler(OptionType.VARIABLE)}
+                        delimiter={delimiter}
                       />
                     </TabsContent>
                     <TabsContent value="command" className="flex-1 overflow-auto">
@@ -458,10 +463,25 @@ const Dropdown = ({
                         onOptionsUpdate={optionsChangeHandler(OptionType.COMMAND)}
                         interpreter={interpreter}
                         onInterpreterChange={onInterpreterChange}
+                        delimiter={delimiter}
                         onCodeMirrorFocus={onCodeMirrorFocus}
                       />
                     </TabsContent>
                   </Tabs>
+                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                    <label className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 block">
+                      Label/Value Delimiter
+                    </label>
+                    <Input
+                      value={delimiter}
+                      onChange={(e) => onDelimiterChange(e.target.value)}
+                      placeholder=":"
+                      className="w-24"
+                    />
+                    <span className="text-xs text-gray-500 dark:text-gray-400 mt-1 block">
+                      Character(s) separating label from value (e.g., ":" or "::" or "-&gt;")
+                    </span>
+                  </div>
                 </ModalBody>
               </>
             )}
@@ -484,7 +504,7 @@ export default createReactBlockSpec(
       value: { default: "" },
       optionsType: { default: "fixed" },
       interpreter: { default: "bash" },
-      // No value stored in props - only the key/name is synced
+      delimiter: { default: ":" },
     },
     content: "none",
   },
@@ -497,6 +517,7 @@ export default createReactBlockSpec(
       if (props.optionsType === "fixed") propsToExport.push("fixedOptions");
       if (props.optionsType === "variable") propsToExport.push("variableOptions");
       if (props.optionsType === "command") propsToExport.push("commandOptions", "interpreter");
+      if (props.delimiter && props.delimiter !== ":") propsToExport.push("delimiter");
 
       let propMatter = exportPropMatter("dropdown", props, propsToExport);
 
@@ -551,6 +572,14 @@ export default createReactBlockSpec(
           props: { ...block.props, interpreter },
         });
       };
+
+      const onDelimiterChange = (delimiter: string): void => {
+        editor.updateBlock(block, {
+          // @ts-ignore
+          props: { ...block.props, delimiter },
+        });
+      };
+
       // ensure the options type is valid
       if (!["fixed", "variable", "command"].includes(block.props.optionsType)) {
         editor.updateBlock(block, {
@@ -568,11 +597,13 @@ export default createReactBlockSpec(
           optionsType={block.props.optionsType as DropdownOptions}
           value={block.props.value}
           interpreter={block.props.interpreter}
+          delimiter={block.props.delimiter}
           onNameUpdate={onNameUpdate}
           onOptionsUpdate={onOptionsUpdate}
           onValueUpdate={onValueUpdate}
           onOptionsTypeChange={onOptionsTypeChange}
           onInterpreterChange={onInterpreterChange}
+          onDelimiterChange={onDelimiterChange}
           isEditable={editor.isEditable}
           onCodeMirrorFocus={handleCodeMirrorFocus}
         />
@@ -605,4 +636,67 @@ export const insertDropdown = (schema: any) => (editor: typeof schema.BlockNoteE
   },
   icon: <ListFilterIcon size={18} />,
   group: "Execute", // Match the group of regular var component
+});
+
+AIBlockRegistry.getInstance().addBlock({
+  typeName: "dropdown",
+  friendlyName: "Dropdown",
+  shortDescription:
+    "Presents a dropdown selector that sets a template variable; choices are sourced from a fixed list, a variable, or a shell command.",
+  description: undent`
+    Dropdown blocks let users select from a list of options. The selected value is stored as a template variable. Options can be fixed, from a variable, or from a shell command.
+
+    The available props are:
+    - name (string): The template variable name to store the selection
+    - optionsType (string): How options are sourced - "fixed", "variable", or "command"
+    - fixedOptions (string): Comma-separated list of fixed options
+    - variableOptions (string): Variable name containing options
+    - commandOptions (string): Shell command that outputs options
+    - interpreter (string): Shell interpreter for command options
+    - value (string): Currently selected value (can be used to set default selection)
+    - delimiter (string): Character(s) separating label from value (default: ":")
+
+    Options support label<delimiter>value format (e.g., "Display Name:actual-value" with default delimiter).
+    The delimiter can be customized for data that contains colons (e.g., use "|" or "::" or "->").
+
+    DEFAULT SELECTION:
+    The 'value' prop sets the initial/default selection. Value should match the actual value, not the display label.
+
+    ERROR HANDLING:
+    - If commandOptions fails, the dropdown shows empty options
+    - If variableOptions references a non-existent variable, options are empty
+    - Invalid option formats are silently skipped
+
+    SERIAL EXECUTION:
+    Dropdown blocks do NOT pause serial execution. They immediately finish with whatever value is currently selected. If no value is selected, the template variable will be empty.
+
+    Example (fixed options): {
+      "type": "dropdown",
+      "props": {
+        "name": "environment",
+        "optionsType": "fixed",
+        "fixedOptions": "Production:prod, Staging:staging, Development:dev"
+      }
+    }
+
+    Example (command output): {
+      "type": "dropdown",
+      "props": {
+        "name": "environment",
+        "optionsType": "command",
+        "commandOptions": "kubectl get pods --no-headers | awk '{print $1}'",
+        "interpreter": "bash"
+      }
+    }
+
+    Example (custom delimiter for data with colons): {
+      "type": "dropdown",
+      "props": {
+        "name": "endpoint",
+        "optionsType": "fixed",
+        "fixedOptions": "Production|https://api.prod.example.com:8080, Staging|https://api.staging.example.com:8080",
+        "delimiter": "|"
+      }
+    }
+  `,
 });

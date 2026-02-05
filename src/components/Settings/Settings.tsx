@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { isAppleDevice } from "@react-aria/utils";
 import { open } from "@tauri-apps/plugin-shell";
 import { PlusIcon, TrashIcon, PlayIcon } from "lucide-react";
 import {
@@ -38,6 +39,7 @@ import handleDeepLink from "@/routes/root/deep";
 import * as api from "@/api/api";
 import InterpreterSelector from "@/lib/blocks/common/InterpreterSelector";
 import AtuinEnv from "@/atuin_env";
+import { OllamaSettings, useAIProviderSettings } from "@/state/settings_ai";
 
 async function loadFonts(): Promise<string[]> {
   const fonts = await invoke<string[]>("list_fonts");
@@ -48,7 +50,7 @@ async function loadFonts(): Promise<string[]> {
 }
 
 // Custom hook for managing settings
-const useSettingsState = (
+export const useSettingsState = (
   _key: any,
   initialValue: any,
   settingsGetter: any,
@@ -108,6 +110,7 @@ interface SettingsSwitchProps {
   onValueChange: (e: boolean) => void;
   description: string;
   className?: string;
+  isDisabled?: boolean;
 }
 
 const SettingSwitch = ({
@@ -116,11 +119,13 @@ const SettingSwitch = ({
   onValueChange,
   description,
   className,
+  isDisabled,
 }: SettingsSwitchProps) => (
   <Switch
     isSelected={isSelected}
     onValueChange={onValueChange}
     className={cn("flex justify-between items-center w-full", className)}
+    isDisabled={isDisabled || false}
   >
     <div className="flex flex-col">
       <span>{label}</span>
@@ -179,6 +184,13 @@ const GeneralSettings = () => {
   const darkModeEditorTheme = useStore((state) => state.darkModeEditorTheme);
   const backgroundSync = useStore((state) => state.backgroundSync);
   const syncConcurrency = useStore((state) => state.syncConcurrency);
+  const uiScale = useStore((state) => state.uiScale);
+  const setUiScale = useStore((state) => state.setUiScale);
+  const [localUiScale, setLocalUiScale] = useState(uiScale);
+
+  useEffect(() => {
+    setLocalUiScale(uiScale);
+  }, [uiScale]);
 
   const [vimModeEnabled, setVimModeEnabledState, vimModeLoading] = useSettingsState(
     "editor_vim_mode",
@@ -333,6 +345,62 @@ const GeneralSettings = () => {
               Follow System
             </SelectItem>
           </Select>
+
+          <div className="mt-6">
+            <div className="flex items-end gap-6">
+              <Slider
+                label="UI Scale"
+                size="md"
+                step={10}
+                minValue={50}
+                maxValue={150}
+                value={localUiScale}
+                onChange={(val: number | number[]) => {
+                  const numVal = Array.isArray(val) ? val[0] : val;
+                  setLocalUiScale(numVal);
+                }}
+                onChangeEnd={(val: number | number[]) => {
+                  const numVal = Array.isArray(val) ? val[0] : val;
+                  setUiScale(numVal);
+                }}
+                marks={[
+                  { value: 50, label: "50%" },
+                  { value: 100, label: "100%" },
+                  { value: 150, label: "150%" },
+                ]}
+                hideValue
+                className="flex-1"
+              />
+              <Input
+                type="number"
+                size="sm"
+                min={50}
+                max={150}
+                step={10}
+                value={localUiScale.toString()}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value);
+                  if (!isNaN(val)) {
+                    setLocalUiScale(val);
+                  }
+                }}
+                onBlur={() => {
+                  const clampedVal = Math.min(150, Math.max(50, localUiScale));
+                  setLocalUiScale(clampedVal);
+                  setUiScale(clampedVal);
+                }}
+                endContent={<span className="text-default-400 text-small">%</span>}
+                classNames={{
+                  base: "w-24",
+                  input: "text-right",
+                }}
+              />
+            </div>
+            <p className="text-tiny text-default-400 mt-1">
+              Adjust the overall UI size. Use {isAppleDevice() ? "Cmd" : "Ctrl"}+/- to quickly zoom, {isAppleDevice() ? "Cmd" : "Ctrl"}+0 to reset.
+            </p>
+          </div>
+
           <div className="flex flex-row gap-4 mt-4">
             <Autocomplete
               label="Font"
@@ -535,6 +603,12 @@ const RunbookSettings = () => {
     Settings.terminalGL,
     Settings.terminalGL,
   );
+  const [terminalGhostty, setTerminalGhostty, ghosttyLoading] = useSettingsState(
+    "terminal_ghostty",
+    false,
+    Settings.terminalGhostty,
+    Settings.terminalGhostty,
+  );
   const [terminalShell, setTerminalShell, shellLoading] = useSettingsState(
     "terminal_shell",
     "",
@@ -557,6 +631,7 @@ const RunbookSettings = () => {
   if (
     fontLoading ||
     glLoading ||
+    ghosttyLoading ||
     urlLoading ||
     fontSizeLoading ||
     shellLoading ||
@@ -590,11 +665,19 @@ const RunbookSettings = () => {
             </div>
           </div>
           <SettingSwitch
-            label="Enable WebGL rendering"
-            isSelected={terminalGl}
-            onValueChange={setTerminalGl}
-            description="May have issues with some fonts"
+            label="Use Ghostty terminal"
+            isSelected={terminalGhostty}
+            onValueChange={setTerminalGhostty}
+            description="Experimental: Use Ghostty's WASM-based terminal emulator"
           />
+          {!terminalGhostty && (
+            <SettingSwitch
+              label="Enable WebGL rendering"
+              isSelected={terminalGl}
+              onValueChange={setTerminalGl}
+              description="May have issues with some fonts"
+            />
+          )}
           <SettingInput
             type="text"
             label="Custom shell"
@@ -710,7 +793,8 @@ const AuthTokenModal = (props: AuthTokenModalProps) => {
   const [validToken, setValidToken] = useState(false);
 
   useEffect(() => {
-    const valid = token.length == 54 && token.startsWith("atapi_");
+    const trimmed = token.trim();
+    const valid = trimmed.startsWith("atapi_") && trimmed.length >= 20;
     setValidToken(valid);
   }, [token]);
 
@@ -731,7 +815,7 @@ const AuthTokenModal = (props: AuthTokenModalProps) => {
             isDisabled={!validToken}
             color="success"
             variant="flat"
-            onPress={() => props.onSubmit(token)}
+            onPress={() => props.onSubmit(token.trim())}
           >
             Submit
           </Button>
@@ -959,6 +1043,26 @@ const NotificationSettings = () => {
     Settings.notificationsSerialFailedOs,
   );
 
+  // Serial paused settings
+  const [serialPausedDuration, setSerialPausedDuration, spDurationLoading] = useSettingsState(
+    "serial_paused_duration",
+    0,
+    Settings.notificationsSerialPausedDuration,
+    Settings.notificationsSerialPausedDuration,
+  );
+  const [serialPausedSound, setSerialPausedSound, spSoundLoading] = useSettingsState(
+    "serial_paused_sound",
+    "to_the_point",
+    Settings.notificationsSerialPausedSound,
+    Settings.notificationsSerialPausedSound,
+  );
+  const [serialPausedOs, setSerialPausedOs, spOsLoading] = useSettingsState(
+    "serial_paused_os",
+    "not_focused",
+    Settings.notificationsSerialPausedOs,
+    Settings.notificationsSerialPausedOs,
+  );
+
   const isLoading =
     sounds === null ||
     enabledLoading ||
@@ -974,7 +1078,10 @@ const NotificationSettings = () => {
     sfOsLoading ||
     sxDurationLoading ||
     sxSoundLoading ||
-    sxOsLoading;
+    sxOsLoading ||
+    spDurationLoading ||
+    spSoundLoading ||
+    spOsLoading;
 
   if (isLoading) return <Spinner />;
 
@@ -1061,6 +1168,18 @@ const NotificationSettings = () => {
                 sounds={sounds}
                 volume={volume}
               />
+              <NotificationRow
+                label="Workflow pauses after running at least"
+                durationLabel="Serial paused minimum duration"
+                duration={serialPausedDuration}
+                onDurationChange={setSerialPausedDuration}
+                sound={serialPausedSound}
+                onSoundChange={setSerialPausedSound}
+                os={serialPausedOs}
+                onOsChange={setSerialPausedOs}
+                sounds={sounds}
+                volume={volume}
+              />
             </div>
           </>
         )}
@@ -1070,73 +1189,127 @@ const NotificationSettings = () => {
 };
 
 const AISettings = () => {
-  const [aiEnabled, setAiEnabled, enabledLoading] = useSettingsState(
-    "ai_enabled",
-    false,
-    Settings.aiEnabled,
-    Settings.aiEnabled,
+  const aiEnabled = useStore((state) => state.aiEnabled);
+  const aiShareContext = useStore((state) => state.aiShareContext);
+  const setAiEnabled = useStore((state) => state.setAiEnabled);
+  const setAiShareContext = useStore((state) => state.setAiShareContext);
+
+  return (
+    <>
+      <Card shadow="sm">
+        <CardBody className="flex flex-col gap-4 mb-4">
+          <h2 className="text-xl font-semibold">AI</h2>
+          <p className="text-sm text-default-500">
+            Configure AI-powered features in runbooks
+          </p>
+
+          <SettingSwitch
+            label="Enable AI features"
+            isSelected={aiEnabled}
+            onValueChange={setAiEnabled}
+            description="Enable AI block generation and editing (Cmd+Enter, Cmd+K, AI Agent Sidebar)"
+          />
+
+          {aiEnabled && (
+            <SettingSwitch
+              className="ml-4"
+              label="Share document context"
+              isSelected={aiShareContext}
+              onValueChange={setAiShareContext}
+              description="Send document content to improve AI suggestions. Disable for sensitive documents."
+            />
+          )}
+        </CardBody>
+      </Card>
+      {aiEnabled && (
+        <>
+          <AgentSettings />
+          <AIOllamaSettings />
+        </>
+      )}
+    </>
   );
-  const [aiApiKey, setAiApiKey, keyLoading] = useSettingsState(
-    "ai_api_key",
-    "",
-    Settings.aiApiKey,
-    Settings.aiApiKey,
-  );
-  const [aiApiEndpoint, setAiApiEndpoint, endpointLoading] = useSettingsState(
-    "ai_api_endpoint",
-    "",
-    Settings.aiApiEndpoint,
-    Settings.aiApiEndpoint,
-  );
-  const [aiModel, setAiModel, modelLoading] = useSettingsState(
-    "ai_model",
-    "",
-    Settings.aiModel,
-    Settings.aiModel,
+};
+
+const AgentSettings = () => {
+  const providers = [
+    ["Atuin Hub", "atuinhub"],
+    ["Ollama", "ollama"]
+  ]
+
+  const [aiProvider, setAiProvider, aiProviderLoading] = useSettingsState(
+    "ai_provider",
+    "atuinhub",
+    Settings.aiAgentProvider,
+    Settings.aiAgentProvider,
   );
 
-  if (enabledLoading || keyLoading || endpointLoading || modelLoading) return <Spinner />;
+  const handleProviderChange = (keys: SharedSelection) => {
+    const key = keys.currentKey as string;
+    if (key) {
+      setAiProvider(key);
+    }
+  };
 
   return (
     <Card shadow="sm">
       <CardBody className="flex flex-col gap-4">
-        <h2 className="text-xl font-semibold">AI Integration</h2>
-        <p className="text-sm text-default-500">Configure AI-powered runbook generation</p>
+        <h2 className="text-xl font-semibold">AI Agent</h2>
+
+        <Select
+          label="Default AI provider"
+          value={aiProvider}
+          onSelectionChange={handleProviderChange}
+          className="mt-4"
+          placeholder="Select default AI provider"
+          selectedKeys={[aiProvider]}
+          items={providers.map(([name, id]) => ({ label: name, key: id }))}
+          isDisabled={aiProviderLoading}
+        >
+          {(item) => <SelectItem key={item.key}>{item.label}</SelectItem>}
+        </Select>
+      </CardBody>
+    </Card>
+  );
+};
+
+const AIOllamaSettings = () => {
+  const [ollamaSettings, setOllamaSettings, isLoading] = useAIProviderSettings<OllamaSettings>("ollama", {
+    enabled: false,
+    endpoint: "http://localhost:11434",
+    model: "",
+  });
+
+  return (
+    <Card shadow="sm">
+      <CardBody className="flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Ollama</h2>
 
         <SettingSwitch
-          label="Enable AI features"
-          isSelected={aiEnabled}
-          onValueChange={setAiEnabled}
-          description="Enable AI-powered runbook generation and assistance"
+          label="Enable Ollama AI provider"
+          isSelected={ollamaSettings.enabled}
+          onValueChange={(enabled) => setOllamaSettings({ ...ollamaSettings, enabled })}
+          description="Toggle to use Ollama as the AI provider."
         />
 
-        {aiEnabled && (
-          <>
-            <SettingInput
-              type="password"
-              label="API Key"
-              value={aiApiKey || ""}
-              onChange={setAiApiKey}
-              placeholder="sk-..."
-              description="Your OpenRouter/OpenAI API key"
+        {ollamaSettings.enabled && (
+          <div className="flex flex-col gap-4">
+            <Input
+              label="Endpoint (optional, defaults to http://localhost:11434)"
+              placeholder="Endpoint URL (e.g. http://localhost:11434)"
+              value={ollamaSettings.endpoint}
+              onValueChange={(value) => setOllamaSettings({ ...ollamaSettings, endpoint: value })}
+              isDisabled={isLoading}
             />
-            <SettingInput
-              type="text"
-              label="API Endpoint"
-              value={aiApiEndpoint || ""}
-              onChange={setAiApiEndpoint}
-              placeholder="https://openrouter.ai/api/v1"
-              description="OpenAI-compatible API endpoint (default: OpenRouter)"
+
+            <Input
+              label="Model (required; your chosen model must support tool calling)"
+              placeholder="Model name"
+              value={ollamaSettings.model}
+              onValueChange={(value) => setOllamaSettings({ ...ollamaSettings, model: value })}
+              isDisabled={isLoading}
             />
-            <SettingInput
-              type="text"
-              label="Model"
-              value={aiModel || ""}
-              onChange={setAiModel}
-              placeholder="anthropic/claude-sonnet-4"
-              description="Model name (e.g., anthropic/claude-sonnet-4, openai/gpt-4)"
-            />
-          </>
+          </div>
         )}
       </CardBody>
     </Card>
@@ -1159,7 +1332,7 @@ const UserSettings = () => {
     const deepLink = `atuin://register-token/${token}`;
     // token submit deep link doesn't require a runbook activation,
     // so passing an empty function for simplicity
-    handleDeepLink(deepLink, () => {});
+    handleDeepLink(deepLink, () => { });
   }
 
   let content;

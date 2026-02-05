@@ -3,7 +3,7 @@ import useRemoteRunbook from "@/lib/useRemoteRunbook";
 import { usePtyStore } from "@/state/ptyStore";
 import { useStore } from "@/state/store";
 import Snapshot from "@/state/runbooks/snapshot";
-import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { timeoutPromise, useMemory } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/api/api";
@@ -32,6 +32,7 @@ import {
 import DebugWindow from "@/lib/dev/DebugWindow";
 import { useSerialExecution } from "@/lib/hooks/useSerialExecution";
 import { Button, Spinner } from "@heroui/react";
+import AtuinEnv from "@/atuin_env";
 
 const Editor = React.lazy(() => import("@/components/runbooks/editor/Editor"));
 const Topbar = React.lazy(() => import("@/components/runbooks/TopBar/TopBar"));
@@ -79,12 +80,31 @@ export default function Runbooks() {
   const [editorKey, setEditorKey] = useState<boolean>(false);
   const [showTagMenu, setShowTagMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const openedRunbookAgents = useStore((state) => state.openedRunbookAgents);
+  const setOpenedRunbookAgent = useStore((state) => state.setOpenedRunbookAgent);
+  const isAIAssistantOpen = openedRunbookAgents[runbookId || ""] || false;
+  const isAIFeaturesEnabled = useStore((state) => state.aiEnabled);
+  const closeAIAssistant = useCallback(() => {
+    if (!runbookId) return;
+    setOpenedRunbookAgent(runbookId, false);
+  }, [runbookId]);
+  const toggleAIAssistant = useCallback(() => {
+    if (!runbookId) return;
+    setOpenedRunbookAgent(runbookId, !isAIAssistantOpen);
+  }, [runbookId, isAIAssistantOpen]);
   const [selectedTag, setSelectedTag] = useState<string | null>(() => {
     let tag = currentRunbook ? getLastTagForRunbook(currentRunbook.id) : null;
     if (tag == "(no tag)") tag = null;
 
     return tag;
   });
+
+  const owningOrgId = useMemo(() => {
+    if (runbookWorkspace) {
+      return runbookWorkspace.isOrgOwned() ? runbookWorkspace.get("orgId") : null;
+    }
+    return null;
+  }, [runbookWorkspace]);
 
   useEffect(
     function syncRunbookIfNotSynced() {
@@ -112,15 +132,16 @@ export default function Runbooks() {
             // we need to set the workspace ID.
             setCurrentWorkspaceId(runbook.workspaceId);
           } else {
-            throw new Error(`Runbook ${runbookId} not found after sync`);
+            setFailedToSyncRunbook(true);
+            console.warn("Runbook not found after sync:", runbookId);
           }
+          setSyncingRunbook(false);
         } catch (err) {
           setFailedToSyncRunbook(true);
           console.warn(
             "Error syncing runbook; this could be normal if the runbook is offline",
             err,
           );
-        } finally {
           setSyncingRunbook(false);
         }
       })();
@@ -493,7 +514,7 @@ export default function Runbooks() {
     <RunbookIdContext.Provider value={currentRunbook?.id || null}>
       <DocumentBridgeContext.Provider value={documentBridge}>
         <div className="flex !w-full !max-w-full flex-row overflow-hidden h-full">
-          {runbookId && focusedBlockId && (
+          {AtuinEnv.isDev && runbookId && focusedBlockId && (
             <BlockContextDebug runbookId={runbookId} blockId={focusedBlockId} />
           )}
           {currentRunbook && readyToRender && (
@@ -516,6 +537,9 @@ export default function Runbooks() {
                 onDeleteFromHub={handleDeletedFromHub}
                 onToggleSettings={() => setShowSettings((show) => !show)}
                 isSettingsOpen={showSettings}
+                isAIFeaturesEnabled={isAIFeaturesEnabled}
+                isAIAssistantOpen={isAIAssistantOpen}
+                toggleAIAssistant={toggleAIAssistant}
               />
               {showSettings && runbookWorkspace && (
                 <RunbookControls
@@ -533,8 +557,11 @@ export default function Runbooks() {
                   <Editor
                     key={editorKey ? "1" : "2"}
                     runbook={currentRunbook}
+                    owningOrgId={owningOrgId || null}
                     runbookEditor={runbookEditor}
                     editable={editable && selectedTag == "latest"}
+                    isAIAssistantOpen={isAIAssistantOpen}
+                    closeAIAssistant={closeAIAssistant}
                   />
                 )}
                 {hasNoTags && (
@@ -573,7 +600,8 @@ export default function Runbooks() {
 }
 
 function BlockContextDebug({ runbookId, blockId }: { runbookId: string; blockId: string }) {
-  const blockContext = useBlockContext(blockId);
+  // Suppress errors because not all focused blocks actually have context
+  const blockContext = useBlockContext(blockId, true);
 
   return (
     <DebugWindow title="Block Context" id={`block-context-${runbookId}`}>

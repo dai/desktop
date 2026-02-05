@@ -1,17 +1,62 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use ts_rs::TS;
 use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use std::io::Read;
 
 use crate::blocks::{Block, BlockBehavior, FromDocument};
-use crate::context::BlockVars;
+use crate::context::{BlockExecutionOutput, BlockVars};
 use crate::events::GCEvent;
 use crate::execution::{
-    BlockOutput, CancellationToken, ExecutionContext, ExecutionHandle, ExecutionStatus,
+    CancellationToken, ExecutionContext, ExecutionHandle, ExecutionStatus, StreamingBlockOutput,
 };
 use crate::pty::{Pty, PtyLike};
-use crate::ssh::SshPty;
+use crate::ssh::{build_env_exports, SshPty, SshWarning};
+
+/// Output structure for Terminal blocks that implements BlockExecutionOutput
+/// for template access to terminal output.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TerminalBlockOutput {
+    /// Raw terminal output (UTF-8 lossy conversion from PTY bytes)
+    pub output: String,
+    /// Total number of bytes received
+    pub byte_count: usize,
+    /// Whether the terminal was cancelled (true) or finished naturally (false)
+    pub cancelled: bool,
+}
+
+impl TerminalBlockOutput {
+    /// Create a new TerminalBlockOutput from accumulated bytes
+    pub fn new(bytes: Vec<u8>, cancelled: bool) -> Self {
+        let byte_count = bytes.len();
+        let output = String::from_utf8_lossy(&bytes).into_owned();
+        Self {
+            output,
+            byte_count,
+            cancelled,
+        }
+    }
+}
+
+impl BlockExecutionOutput for TerminalBlockOutput {
+    fn get_template_value(&self, key: &str) -> Option<minijinja::Value> {
+        match key {
+            "output" => Some(minijinja::Value::from(self.output.clone())),
+            "byte_count" => Some(minijinja::Value::from(self.byte_count)),
+            "cancelled" => Some(minijinja::Value::from(self.cancelled)),
+            _ => None,
+        }
+    }
+
+    fn enumerate_template_keys(&self) -> minijinja::value::Enumerator {
+        minijinja::value::Enumerator::Str(&["output", "byte_count", "cancelled"])
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, TypedBuilder)]
 #[serde(rename_all = "camelCase")]
@@ -27,6 +72,12 @@ pub struct Terminal {
 
     #[builder(default = true)]
     pub output_visible: bool,
+
+    #[builder(default = 20)]
+    pub rows: u16,
+
+    #[builder(default = 120)]
+    pub cols: u16,
 }
 
 impl FromDocument for Terminal {
@@ -65,6 +116,20 @@ impl FromDocument for Terminal {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(true),
             )
+            .rows(
+                props
+                    .get("rows")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u16)
+                    .unwrap_or(20),
+            )
+            .cols(
+                props
+                    .get("cols")
+                    .and_then(|v| v.as_u64())
+                    .map(|v| v as u16)
+                    .unwrap_or(120),
+            )
             .build();
 
         Ok(terminal)
@@ -98,7 +163,7 @@ impl BlockBehavior for Terminal {
 
         let _ = context
             .send_output(
-                BlockOutput::builder()
+                StreamingBlockOutput::builder()
                     .block_id(self.id)
                     .object(
                         serde_json::to_value(metadata.clone())
@@ -111,10 +176,14 @@ impl BlockBehavior for Terminal {
         let handle_clone = context.handle();
 
         tokio::spawn(async move {
-            // `run_terminal` handles all lifecycle events.
-            let _ = self
+            // `run_terminal` handles all lifecycle events for successful execution.
+            // If it returns an error, we need to signal failure.
+            if let Err(e) = self
                 .run_terminal(context.clone(), metadata, context.cancellation_token())
-                .await;
+                .await
+            {
+                let _ = context.block_failed(e.to_string()).await;
+            }
         });
 
         Ok(Some(handle_clone))
@@ -122,26 +191,13 @@ impl BlockBehavior for Terminal {
 }
 
 impl Terminal {
-    /// Parse SSH host string to extract username and hostname
     fn parse_ssh_host(ssh_host: &str) -> (Option<String>, String) {
         if let Some(at_pos) = ssh_host.find('@') {
             let username = ssh_host[..at_pos].to_string();
-            let host_part = &ssh_host[at_pos + 1..];
-            // Remove port if present
-            let hostname = if let Some(colon_pos) = host_part.find(':') {
-                host_part[..colon_pos].to_string()
-            } else {
-                host_part.to_string()
-            };
-            (Some(username), hostname)
+            let host_part = ssh_host[at_pos + 1..].to_string();
+            (Some(username), host_part)
         } else {
-            // No username specified, just hostname
-            let hostname = if let Some(colon_pos) = ssh_host.find(':') {
-                ssh_host[..colon_pos].to_string()
-            } else {
-                ssh_host.to_string()
-            };
-            (None, hostname)
+            (None, ssh_host.to_string())
         }
     }
 
@@ -162,88 +218,157 @@ impl Terminal {
             .take_receiver()
             .ok_or("Cancellation receiver already taken")?;
 
-        // Setup fs_var for local terminal or remote path for SSH
-        let fs_var_handle: Option<crate::context::fs_var::FsVarHandle>;
-        let remote_var_path: Option<(String, Option<String>, String)>; // (hostname, username, path)
+        let output_accumulator: Arc<RwLock<Vec<u8>>> = Arc::new(RwLock::new(Vec::new()));
 
-        if let Some(ssh_host) = context.context_resolver.ssh_host() {
+        let templated_code = if !self.code.is_empty() {
+            context.context_resolver.resolve_template(&self.code)?
+        } else {
+            String::new()
+        };
+
+        let uses_output_vars = templated_code.contains("ATUIN_OUTPUT_VARS");
+
+        let ssh_host = context.context_resolver.ssh_host().cloned();
+        let ssh_config = context.context_resolver.ssh_config().cloned();
+        let fs_var_handle: Option<crate::context::fs_var::FsVarHandle>;
+        let remote_var_path: Option<String>;
+
+        if let Some(ref host) = ssh_host {
             fs_var_handle = None;
 
-            // For SSH, create remote temp file
-            let (username, hostname) = Self::parse_ssh_host(ssh_host);
-            let ssh_pool = context
-                .ssh_pool
-                .clone()
-                .ok_or("SSH pool not available in execution context")?;
+            if uses_output_vars {
+                let (username, hostname) = Self::parse_ssh_host(host);
+                let ssh_pool = context
+                    .ssh_pool
+                    .clone()
+                    .ok_or("SSH pool not available in execution context")?;
 
-            let remote_path = ssh_pool
-                .create_temp_file(&hostname, username.as_deref(), "atuin-desktop-vars")
-                .await
-                .map_err(|e| format!("Failed to create remote temp file: {}", e))?;
+                let remote_path = ssh_pool
+                    .create_temp_file(&hostname, username.as_deref(), "atuin-desktop-vars")
+                    .await
+                    .map_err(|e| format!("Failed to create remote temp file: {}", e))?;
 
-            remote_var_path = Some((hostname, username, remote_path));
+                remote_var_path = Some(remote_path);
+            } else {
+                remote_var_path = None;
+            }
         } else {
-            fs_var_handle =
-                Some(crate::context::fs_var::setup().map_err(|e| {
+            if uses_output_vars {
+                fs_var_handle = Some(crate::context::fs_var::setup().map_err(|e| {
                     format!("Failed to setup temp file for output variables: {}", e)
                 })?);
+            } else {
+                fs_var_handle = None;
+            }
             remote_var_path = None;
         }
 
-        // Open PTY based on context (local or SSH)
         let cancellation_token_clone = cancellation_token.clone();
-        let pty: Box<dyn PtyLike + Send> = if let Some((
-            ref hostname,
-            ref username,
-            ref remote_path,
-        )) = remote_var_path
-        {
-            // Get SSH pool from context
+        let pty: Box<dyn PtyLike + Send> = if let Some(ref host) = ssh_host {
+            let (username, hostname) = Self::parse_ssh_host(host);
             let ssh_pool = context
                 .ssh_pool
                 .clone()
                 .ok_or("SSH pool not available in execution context")?;
 
-            // Create SSH PTY with cancellation support
             let (output_sender, mut output_receiver) = tokio::sync::mpsc::channel(100);
             let hostname_clone = hostname.clone();
             let username_clone = username.clone();
             let pty_id_str = self.id.to_string();
             let ssh_pool_clone = ssh_pool.clone();
+            let remote_path_clone = remote_var_path.clone();
 
-            // Open SSH PTY with cancellation support - use the receiver we took earlier
+            let initial_cols = self.cols;
+            let initial_rows = self.rows;
+            let ssh_config_clone = ssh_config.clone();
             let ssh_result = tokio::select! {
-                result = ssh_pool_clone.open_pty(
+                result = ssh_pool_clone.open_pty_with_config(
                     &hostname_clone,
                     username_clone.as_deref(),
                     &pty_id_str,
                     output_sender.clone(),
-                    80,
-                    24,
+                    initial_cols,
+                    initial_rows,
+                    ssh_config_clone,
                 ) => {
                     result.map_err(|e| format!("Failed to open SSH PTY: {}", e))
                 }
                 _ = &mut cancel_rx => {
                     let _ = ssh_pool_clone.close_pty(&pty_id_str).await;
                     let _ = context.block_cancelled().await;
-                    // Cleanup remote temp file if it was created
-                    let _ = ssh_pool_clone.delete_file(&hostname_clone, username_clone.as_deref(), remote_path).await;
+                    if let Some(ref path) = remote_path_clone {
+                        let _ = ssh_pool_clone.delete_file(&hostname_clone, username_clone.as_deref(), path).await;
+                    }
                     return Err("SSH PTY connection cancelled".into());
                 }
             };
 
-            let (pty_tx, resize_tx) = ssh_result?;
+            let (pty_tx, resize_tx, warnings) = ssh_result?;
 
-            // Forward SSH output to binary channel
+            // Emit events for any authentication warnings
+            for warning in warnings {
+                match warning {
+                    SshWarning::CertificateLoadFailed {
+                        host,
+                        cert_path,
+                        error,
+                    } => {
+                        let _ = context
+                            .emit_gc_event(GCEvent::SshCertificateLoadFailed {
+                                host,
+                                cert_path,
+                                error,
+                            })
+                            .await;
+                    }
+                    SshWarning::CertificateExpired {
+                        host,
+                        cert_path,
+                        valid_until,
+                    } => {
+                        let _ = context
+                            .emit_gc_event(GCEvent::SshCertificateExpired {
+                                host,
+                                cert_path,
+                                valid_until,
+                            })
+                            .await;
+                    }
+                    SshWarning::CertificateNotYetValid {
+                        host,
+                        cert_path,
+                        valid_from,
+                    } => {
+                        let _ = context
+                            .emit_gc_event(GCEvent::SshCertificateNotYetValid {
+                                host,
+                                cert_path,
+                                valid_from,
+                            })
+                            .await;
+                    }
+                }
+            }
+
+            // Forward SSH output to binary channel and accumulate
             let context_clone = context.clone();
             let block_id = self.id;
+            let output_accumulator_clone = output_accumulator.clone();
             tokio::spawn(async move {
                 while let Some(output) = output_receiver.recv().await {
+                    let bytes = output.as_bytes().to_vec();
+
+                    // Accumulate output
+                    output_accumulator_clone
+                        .write()
+                        .await
+                        .extend_from_slice(&bytes);
+
                     let _ = context_clone
                         .send_output(
-                            BlockOutput::builder()
+                            StreamingBlockOutput::builder()
                                 .block_id(block_id)
-                                .binary(output.as_bytes().to_vec())
+                                .binary(bytes)
                                 .build(),
                         )
                         .await;
@@ -271,12 +396,12 @@ impl Terminal {
             }
 
             let pty = Pty::open(
-                24,
-                80,
+                self.rows,
+                self.cols,
                 Some(cwd.to_string()),
                 env_vars,
                 metadata.clone(),
-                None, // Use default shell
+                None,
             )
             .await
             .map_err(|e| format!("Failed to open local PTY: {}", e))?;
@@ -289,6 +414,7 @@ impl Terminal {
             let block_id = self.id;
 
             let cancellation_token_clone = cancellation_token_clone.clone();
+            let output_accumulator_clone = output_accumulator.clone();
             tokio::spawn(async move {
                 loop {
                     // Use blocking read in a blocking task
@@ -312,12 +438,20 @@ impl Terminal {
                             break;
                         }
                         Ok(Ok((n, buf))) => {
+                            let bytes = buf[..n].to_vec();
+
+                            // Accumulate output
+                            output_accumulator_clone
+                                .write()
+                                .await
+                                .extend_from_slice(&bytes);
+
                             // Send raw binary data
                             let _ = context_clone
                                 .send_output(
-                                    BlockOutput::builder()
+                                    StreamingBlockOutput::builder()
                                         .block_id(block_id)
-                                        .binary(buf[..n].to_vec())
+                                        .binary(bytes)
                                         .build(),
                                 )
                                 .await;
@@ -357,25 +491,30 @@ impl Terminal {
             .emit_gc_event(GCEvent::PtyOpened(metadata.clone()))
             .await;
 
-        // For SSH terminals, export ATUIN_OUTPUT_VARS first
-        if let Some((_, _, ref remote_path)) = remote_var_path {
+        if ssh_host.is_some() {
+            let env_exports = build_env_exports(context.context_resolver.env_vars());
+            if !env_exports.is_empty() {
+                if let Err(e) = pty_store.write_pty(self.id, env_exports.into()).await {
+                    tracing::warn!("Failed to write env exports to SSH PTY: {}", e);
+                }
+            }
+        }
+
+        if let Some(ref remote_path) = remote_var_path {
             let export_cmd = format!("export ATUIN_OUTPUT_VARS='{}'\n", remote_path);
             if let Err(e) = pty_store.write_pty(self.id, export_cmd.into()).await {
                 tracing::warn!("Failed to write export command to SSH PTY: {}", e);
             }
         }
 
-        // Write the command to the PTY after started event
-        if !self.code.is_empty() {
-            let command = context.context_resolver.resolve_template(&self.code)?;
-            let command = if command.ends_with('\n') {
-                command
+        if !templated_code.is_empty() {
+            let command = if templated_code.ends_with('\n') {
+                templated_code.clone()
             } else {
-                format!("{}\n", command)
+                format!("{}\n", templated_code)
             };
 
             if let Err(e) = pty_store.write_pty(self.id, command.into()).await {
-                // Send error event if command writing fails
                 let _ = context
                     .block_failed(format!("Failed to write command to PTY: {}", e))
                     .await;
@@ -416,12 +555,12 @@ impl Terminal {
                     tracing::warn!("Failed to read terminal output variables: {}", e);
                 }
             }
-        } else if let Some((hostname, username, remote_path)) = remote_var_path {
-            // SSH terminal
+        } else if let (Some(ref host), Some(ref remote_path)) = (&ssh_host, &remote_var_path) {
+            let (username, hostname) = Self::parse_ssh_host(host);
             let ssh_pool = context.ssh_pool.clone().unwrap();
 
             match ssh_pool
-                .read_file(&hostname, username.as_deref(), &remote_path)
+                .read_file(&hostname, username.as_deref(), remote_path)
                 .await
             {
                 Ok(contents) => {
@@ -446,9 +585,8 @@ impl Terminal {
                 }
             }
 
-            // Cleanup remote temp file
             let _ = ssh_pool
-                .delete_file(&hostname, username.as_deref(), &remote_path)
+                .delete_file(&hostname, username.as_deref(), remote_path)
                 .await;
         }
 
@@ -458,9 +596,17 @@ impl Terminal {
             .emit_gc_event(GCEvent::PtyClosed { pty_id: self.id })
             .await;
 
+        // Determine if the terminal was cancelled (still running = cancelled by user)
+        let was_cancelled = *context.handle().status.read().await == ExecutionStatus::Running;
+
+        // Store accumulated output for template access
+        let accumulated_bytes = output_accumulator.read().await.clone();
+        let terminal_output = TerminalBlockOutput::new(accumulated_bytes, was_cancelled);
+        let _ = context.set_block_output(terminal_output).await;
+
         // If the block is still running, cancel it.
         // This will happen when the user manually cancels the block execution.
-        if *context.handle().status.read().await == ExecutionStatus::Running {
+        if was_cancelled {
             let _ = context.block_cancelled().await;
         }
         Ok(true)

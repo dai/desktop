@@ -25,6 +25,8 @@ import { trackOnlineStatus } from "./lib/online_tracker";
 import { setupColorModes } from "./lib/color_modes";
 import { setupServerEvents } from "./lib/server_events";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { platform } from "@tauri-apps/plugin-os";
 import debounce from "lodash.debounce";
 import Workspace from "./state/runbooks/workspace";
 import { SharedStateManager } from "./lib/shared_state/manager";
@@ -39,7 +41,6 @@ import Runbook from "./state/runbooks/runbook";
 import Operation from "./state/runbooks/operation";
 import EditorBus from "./lib/buses/editor";
 import BlockBus from "./lib/workflow/block_bus";
-import { generateBlocks } from "./lib/ai/block_generator";
 import WorkspaceManager from "./lib/workspaces/manager";
 import Root from "./routes/root/Root";
 import RunbookBus from "./lib/app/runbook_bus";
@@ -103,7 +104,6 @@ DevConsole.addAppObject("invoke", invoke)
   .addAppObject("EditorBus", EditorBus.get())
   .addAppObject("BlockBus", BlockBus.get())
   .addAppObject("SharedStateManager", SharedStateManager)
-  .addAppObject("generateBlocks", generateBlocks)
   .addAppObject("grandCentral", grandCentral)
   .addAppObject("models", {
     Runbook,
@@ -141,7 +141,7 @@ event.listen("tauri://move", debouncedSaveWindowInfo);
 event.listen("tauri://resize", debouncedSaveWindowInfo);
 
 function Application() {
-  const { refreshUser, refreshCollaborations, online, user } = useStore();
+  const { refreshUser, refreshCollaborations, online, user, uiScale } = useStore();
 
   useEffect(() => {
     if (online) {
@@ -159,12 +159,29 @@ function Application() {
     startupOperationProcessor();
   }, []);
 
+  useEffect(() => {
+    getCurrentWebview()
+      .setZoom(uiScale / 100)
+      .catch((err) => {
+        console.error("Failed to set zoom:", err);
+      });
+  }, [uiScale]);
+
   return (
     <HeroUIProvider>
-      <ToastProvider placement="bottom-center" toastOffset={40} />
+      <ToastProvider
+        placement="bottom-center"
+        toastOffset={40}
+        toastProps={{
+          classNames: {
+            base: "overflow-hidden",
+            description: "break-all",
+          },
+        }}
+      />
       <QueryClientProvider client={queryClient}>
         <ReactQueryDevtools initialIsOpen={false} buttonPosition="bottom-right" />
-        <main className="text-foreground bg-background overflow-hidden z-20 relative">
+        <main className="text-foreground overflow-hidden z-20 relative">
           <Root />
         </main>
       </QueryClientProvider>
@@ -173,6 +190,14 @@ function Application() {
 }
 
 async function setup() {
+  // Detect platform and set data attribute for CSS
+  try {
+    const currentPlatform = platform();
+    document.documentElement.dataset.platform = currentPlatform;
+  } catch (err) {
+    console.warn("Failed to detect platform:", err);
+  }
+
   try {
     const advancedSettings = await invoke<AdvancedSettings>("get_advanced_settings");
     useStore.getState().setAdvancedSettings(advancedSettings);
@@ -209,8 +234,10 @@ window.addEventListener(
   "keydown",
   (event) => {
     const blocknoteBlock = (event.target as Element).closest(".bn-block");
+    const codemirrorEditor = (event.target as Element).closest(".cm-editor");
 
-    if (blocknoteBlock && event.key === "Escape") {
+    // Allow Escape to propagate to CodeMirror editors (needed for vim mode)
+    if (blocknoteBlock && event.key === "Escape" && !codemirrorEditor) {
       event.preventDefault();
       event.stopPropagation();
     }

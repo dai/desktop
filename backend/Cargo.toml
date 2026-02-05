@@ -3,7 +3,7 @@ name = "atuin-desktop"
 description = "Atuin Desktop"
 publish = false
 workspace = ".."
-version = "0.2.6"            # duplicated here as CN CLI can't handle workspace version
+version = "0.2.19"            # duplicated here as CN CLI can't handle workspace version
 edition.workspace = true
 
 [lints.clippy]
@@ -20,7 +20,6 @@ atuin-common = { git = "https://github.com/atuinsh/atuin.git" }
 atuin-dotfiles = { git = "https://github.com/atuinsh/atuin.git" }
 atuin-history = { git = "https://github.com/atuinsh/atuin.git" }
 atuin-desktop-runtime = { workspace = true }
-atuin-desktop-templates = { workspace = true }
 
 eyre = { workspace = true }
 time = { workspace = true }
@@ -37,18 +36,24 @@ url = { workspace = true }
 sha2 = "0.10"
 bigdecimal = { workspace = true }
 
-tauri = { version = "2.8.4", features = ["tray-icon", "devtools"] }
-tauri-plugin-http = { version = "2.5.2", features = ["native-tls"] }
-tauri-plugin-deep-link = "2.4.3"
-tauri-plugin-single-instance = { version = "2.3.4", features = ["deep-link"] }
-tauri-plugin-os = "2.3.1"
-tauri-plugin-shell = "2.3.1"
-tauri-plugin-dialog = "2.4.0"
-tauri-plugin-process = "2.3.0"
-tauri-plugin-fs = "2.4.2"
-tauri-plugin-opener = "2.5.0"
+tauri = { version = "2.9.4", default-features = false, features = [
+    "tray-icon",
+    "devtools",
+    "compression",
+    "common-controls-v6",
+    "macos-private-api",
+] }
+tauri-plugin-http = { version = "2.5.4", features = ["native-tls"] }
+tauri-plugin-deep-link = "2.4.5"
+tauri-plugin-single-instance = { version = "2.3.6", features = ["deep-link"] }
+tauri-plugin-os = "2.3.2"
+tauri-plugin-shell = "2.3.3"
+tauri-plugin-dialog = "2.4.2"
+tauri-plugin-process = "2.3.1"
+tauri-plugin-fs = "2.4.4"
+tauri-plugin-opener = "2.5.2"
 tauri-plugin-log = { version = "2.7.0", features = ["colored"] }
-tauri-plugin-notification = "2.2.1"
+tauri-plugin-notification = "2.3.3"
 
 rodio = { version = "0.19", default-features = false, features = ["vorbis"] }
 humantime = "2.3.0"
@@ -83,10 +88,16 @@ log = { workspace = true }
 dirs = { workspace = true }
 tempfile = { workspace = true }
 config = "0.15.19"
+genai = { git = "https://github.com/BinaryMuse/rust-genai", rev = "ce7feec4ae112cc9ad442841c6b49961a599580e" }
+futures-util = "0.3.31"
+indoc = "2.0.7"
+
+# Note: tauri's test feature is not enabled here because the feat/cef branch has a broken MockRuntime.
+# Tests use Wry directly instead of MockRuntime when running with default features.
 
 [dependencies.tauri-plugin-sql]
 features = ["sqlite"] # or "postgres", or "mysql"
-version = "2.3.0"
+version = "2.3.1"
 
 [target."cfg(target_os = \"macos\")".dependencies]
 cocoa = "0.26"
@@ -95,6 +106,9 @@ cocoa = "0.26"
 tauri-plugin-updater = "2.9.0"
 
 [features]
+default = ["wry"]
 # this feature is used for production builds or when `devPath` points to the filesystem
 # DO NOT REMOVE!!
 custom-protocol = ["tauri/custom-protocol"]
+wry = ["tauri/wry"]
+cef = ["tauri/cef"]

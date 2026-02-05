@@ -77,10 +77,10 @@ jobs:
         include:
           - platform: "macos-latest" # for Arm based macs (M1 and above).
             args: "--target aarch64-apple-darwin"
-          - platform: "macos-15-intel"
-            args: "--target x86_64-apple-darwin"
           - platform: "depot-ubuntu-22.04-4"
             args: ""
+          - platform: "depot-ubuntu-24.04-arm-4"
+            args: "--target aarch64-unknown-linux-gnu"
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -91,33 +91,37 @@ jobs:
           ssh-private-key: ${{ secrets.TS_CLONE_DEPLOY_KEY }}
 
       - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'depot-ubuntu-22.04-4' # This must match the platform value defined above.
+        if: matrix.platform == 'depot-ubuntu-22.04-4' || matrix.platform == 'depot-ubuntu-24.04-arm-4'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
 
-      - uses: pnpm/action-setup@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          version: latest
+          bun-version: latest
 
       - name: setup node
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: "pnpm" # Set this to npm, yarn or pnpm.
 
       - name: install Rust stable
         uses: dtolnay/rust-toolchain@stable # Set this to dtolnay/rust-toolchain@nightly
         with:
-          # Those targets are only used on macos runners so it's in an `if` to slightly speed up windows and linux builds.
-          targets: ${{ (matrix.platform == 'macos-latest' || matrix.platform == 'macos-15-intel') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          # Targets are set for macOS and ARM Linux runners to enable cross-compilation.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || (matrix.platform == 'depot-ubuntu-24.04-arm-4' && 'aarch64-unknown-linux-gnu' || '') }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
 
       - name: install frontend dependencies
-        # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
-        run: pnpm install # change this to npm or pnpm depending on which one you use.
+        run: bun install
+
+      - name: Set release version
+        # we need to remove the "v" prefix from the version for Sentry
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - uses: tauri-apps/tauri-action@v0
         id: tauri-action
@@ -130,6 +134,8 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_RELEASE: ${{ steps.version.outputs.version }}
           NODE_OPTIONS: "--max-old-space-size=6144"
         with:
           args: ${{ matrix.args }}
@@ -149,8 +155,6 @@ jobs:
           platform_suffix=""
           if [[ "${{ matrix.args }}" == *"aarch64-apple-darwin"* ]]; then
             platform_suffix="-aarch64"
-          elif [[ "${{ matrix.args }}" == *"x86_64-apple-darwin"* ]]; then
-            platform_suffix="-x86_64"
           fi
 
           # Rename files and upload to GitHub release

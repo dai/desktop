@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
-import { platform } from "@tauri-apps/plugin-os";
 import { FitAddon } from "@xterm/addon-fit";
+import {
+  FitAddon as GhosttyFitAddon,
+  Terminal as GhosttyTerminal,
+  init as initGhostty,
+} from "ghostty-web";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { open } from "@tauri-apps/plugin-shell";
 import { IDisposable, Terminal } from "@xterm/xterm";
@@ -8,20 +12,29 @@ import { Settings } from "../settings";
 import { WebglAddon } from "@xterm/addon-webgl";
 import Logger from "@/lib/logger";
 import { StateCreator } from "zustand";
-import { templateString } from "../templates";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import Emittery from "emittery";
+
+// Track if ghostty WASM has been initialized
+let ghosttyInitialized = false;
+async function ensureGhosttyInit() {
+  if (!ghosttyInitialized) {
+    await initGhostty();
+    ghosttyInitialized = true;
+  }
+}
 
 const logger = new Logger("PtyStore");
 const endMarkerRegex = /\x1b\]633;ATUIN_COMMAND_END;(\d+)\x1b\\/;
 
 export class TerminalData extends Emittery {
-  terminal: Terminal;
-  fitAddon: FitAddon;
+  terminal: Terminal | GhosttyTerminal;
+  fitAddon: FitAddon | GhosttyFitAddon;
   pty: string;
+  isGhostty: boolean;
 
   disposeResize: IDisposable;
-  disposeOnData: IDisposable;
+  disposeOnData?: IDisposable;
   unlisten: UnlistenFn | null;
 
   startTime: number | null;
@@ -33,18 +46,28 @@ export class TerminalData extends Emittery {
    */
   hasRunInitialScript: boolean;
 
-  constructor(pty: string, terminal: Terminal, fit: FitAddon) {
+  constructor(
+    pty: string,
+    terminal: Terminal | GhosttyTerminal,
+    fit: FitAddon | GhosttyFitAddon,
+    isGhostty: boolean = false,
+  ) {
     super();
 
     this.terminal = terminal;
     this.fitAddon = fit;
     this.pty = pty;
+    this.isGhostty = isGhostty;
     this.startTime = null;
     this.unlisten = null;
     this.hasRunInitialScript = false;
 
     this.disposeResize = this.terminal.onResize((e) => this.onResize(e));
-    this.disposeOnData = this.terminal.onData((e) => this.onData(e));
+    // For ghostty, onData is set up after open() in terminal.tsx
+    // because InputHandler is created during open()
+    if (!isGhostty) {
+      this.disposeOnData = this.terminal.onData((e) => this.onData(e));
+    }
   }
 
   async listen() {
@@ -85,21 +108,9 @@ export class TerminalData extends Emittery {
     });
   }
 
-  async write(block_id: string, data: string, doc: any, runbook: string | null) {
-    // Template the string before we execute it
-    logger.debug(`templating ${runbook} with doc`, doc);
-    let templated = await templateString(block_id, data, doc, runbook);
-
-    let isWindows = platform() == "windows";
-    let cmdEnd = isWindows ? "\r\n" : "\n";
-    let val = !templated.endsWith("\n") ? templated + cmdEnd : templated;
-
-    await invoke("pty_write", { pid: this.pty, data: val });
-  }
-
   dispose() {
     this.disposeResize.dispose();
-    this.disposeOnData.dispose();
+    this.disposeOnData?.dispose();
     this.terminal.dispose();
 
     if (this.unlisten) {
@@ -165,33 +176,53 @@ export const createPtyState: StateCreator<AtuinPtyState> = (set, get, _store): A
     let font = (await Settings.terminalFont()) || Settings.DEFAULT_FONT;
     let fontSize = (await Settings.terminalFontSize()) || Settings.DEFAULT_FONT_SIZE;
     let gl = await Settings.terminalGL();
+    let useGhostty = await Settings.terminalGhostty();
 
-    let terminal = new Terminal({
-      fontFamily: `${font}, monospace`,
-      fontSize: fontSize,
-      rescaleOverlappingGlyphs: true,
-      letterSpacing: 0,
-      lineHeight: 1,
-    });
+    let terminal: Terminal | GhosttyTerminal;
+    let fitAddon: FitAddon | GhosttyFitAddon;
 
-    // TODO: fallback to canvas, also some sort of setting to allow disabling webgl usage
-    // probs fine for now though, it's widely supported. maybe issues on linux.
-    if (gl) {
-      // May have font issues
-      terminal.loadAddon(new WebglAddon());
+    if (useGhostty) {
+      // Ensure ghostty WASM is initialized
+      await ensureGhosttyInit();
+
+      // Use Ghostty's WASM-based terminal
+      // Ghostty has built-in URL detection via OSC8LinkProvider and UrlRegexProvider
+      terminal = new GhosttyTerminal({
+        fontFamily: `${font}, monospace`,
+        fontSize: fontSize,
+      });
+
+      fitAddon = new GhosttyFitAddon();
+      terminal.loadAddon(fitAddon);
+    } else {
+      // Use xterm.js
+      terminal = new Terminal({
+        fontFamily: `${font}, monospace`,
+        fontSize: fontSize,
+        rescaleOverlappingGlyphs: true,
+        letterSpacing: 0,
+        lineHeight: 1,
+      });
+
+      // TODO: fallback to canvas, also some sort of setting to allow disabling webgl usage
+      // probs fine for now though, it's widely supported. maybe issues on linux.
+      if (gl) {
+        // May have font issues
+        terminal.loadAddon(new WebglAddon());
+      }
+
+      fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+
+      function onLinkClick(_event: any, url: any) {
+        open(url);
+      }
+
+      let link = new WebLinksAddon(onLinkClick);
+      terminal.loadAddon(link);
     }
 
-    let fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-
-    function onLinkClick(_event: any, url: any) {
-      open(url);
-    }
-
-    let link = new WebLinksAddon(onLinkClick);
-    terminal.loadAddon(link);
-
-    let td = new TerminalData(pty, terminal, fitAddon);
+    let td = new TerminalData(pty, terminal, fitAddon, useGhostty);
 
     set({
       terminals: { ...get().terminals, [pty]: td },

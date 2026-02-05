@@ -11,7 +11,8 @@ use crate::{
     blocks::BlockBehavior,
     client::LocalValueProvider,
     context::{
-        BlockWithContext, DocumentCwd, DocumentEnvVar, DocumentSshHost, DocumentVar, DocumentVars,
+        DocumentBlock, DocumentCwd, DocumentEnvVar, DocumentEnvVars, DocumentSshConfig,
+        DocumentSshHost, DocumentVar, DocumentVars,
     },
 };
 
@@ -49,7 +50,7 @@ impl ResolvedContext {
             .await?
         {
             let block_with_context =
-                BlockWithContext::new(block.clone().into_block(), context, None, None);
+                DocumentBlock::new(block.clone().into_block(), context, None, None, None);
             let resolver = ContextResolver::from_blocks(&[block_with_context]);
             Ok(Self::from_resolver(&resolver))
         } else {
@@ -65,6 +66,8 @@ pub struct ContextResolver {
     cwd: String,
     env_vars: HashMap<String, String>,
     ssh_host: Option<String>,
+    /// Full SSH configuration from SSH Connect block (includes identity key, overrides, etc.)
+    ssh_config: Option<DocumentSshConfig>,
     extra_template_context: HashMap<String, Value>,
 }
 
@@ -76,6 +79,7 @@ impl ContextResolver {
             cwd: default_cwd(),
             env_vars: HashMap::new(),
             ssh_host: None,
+            ssh_config: None,
             extra_template_context: HashMap::new(),
         }
     }
@@ -90,7 +94,7 @@ impl ContextResolver {
     }
 
     /// Build a resolver from blocks (typically all blocks above the current one)
-    pub fn from_blocks(blocks: &[BlockWithContext]) -> Self {
+    pub fn from_blocks(blocks: &[DocumentBlock]) -> Self {
         // Process blocks in order (earlier blocks can be overridden by later ones)
         let mut resolver = Self::new();
         for block in blocks {
@@ -98,6 +102,24 @@ impl ContextResolver {
         }
 
         resolver
+    }
+
+    /// Build a resolver from blocks with a parent context
+    /// The parent context provides initial vars, env_vars, cwd, ssh_host
+    /// which are then extended/overridden by the blocks
+    pub fn from_blocks_with_parent(blocks: &[DocumentBlock], parent: &ContextResolver) -> Self {
+        let mut resolver = Self::from_parent(parent);
+        for block in blocks {
+            resolver.push_block(block);
+        }
+        resolver
+    }
+
+    /// Push multiple blocks to the resolver
+    pub fn push_blocks(&mut self, blocks: &[DocumentBlock]) {
+        for block in blocks {
+            self.push_block(block);
+        }
     }
 
     /// Test-only constructor to create a resolver with specific vars
@@ -114,13 +136,14 @@ impl ContextResolver {
                 .to_string(),
             env_vars: HashMap::new(),
             ssh_host: None,
+            ssh_config: None,
             extra_template_context: HashMap::new(),
         }
     }
 
     /// Update the resolver with the context of a block.
     /// Values are overwritten or merged as appropriate.
-    pub fn push_block(&mut self, block: &BlockWithContext) {
+    pub fn push_block(&mut self, block: &DocumentBlock) {
         let passive_context = block.passive_context();
         let active_context = block.active_context();
 
@@ -163,6 +186,25 @@ impl ContextResolver {
                 }
             }
 
+            // Process multiple environment variables (from sub-runbook imports)
+            if let Some(envs) = ctx.get::<DocumentEnvVars>() {
+                tracing::debug!(
+                    "Processing DocumentEnvVars with {} entries",
+                    envs.iter().count()
+                );
+                for env in envs.iter() {
+                    tracing::debug!("Adding env var from DocumentEnvVars: {}={}", env.0, env.1);
+                    if let Ok(resolved_value) = self.resolve_template(&env.1) {
+                        self.env_vars.insert(env.0.clone(), resolved_value);
+                    } else {
+                        tracing::warn!(
+                            "Failed to resolve template for environment variable {}",
+                            env.0
+                        );
+                    }
+                }
+            }
+
             // Process cwd after env vars so it can expand ${VAR} references
             if let Some(dir) = ctx.get::<DocumentCwd>() {
                 if let Ok(resolved_value) = self.resolve_template(&dir.0) {
@@ -199,6 +241,11 @@ impl ContextResolver {
                     self.ssh_host = None;
                 }
             }
+
+            // Process full SSH configuration (includes identity key, overrides, etc.)
+            if let Some(config) = ctx.get::<DocumentSshConfig>() {
+                self.ssh_config = Some(config.clone());
+            }
         }
     }
 
@@ -212,6 +259,14 @@ impl ContextResolver {
         // Create a minijinja environment
         let mut env = Environment::new();
         env.set_trim_blocks(true);
+
+        // Add custom filter for shell escaping
+        env.add_filter("shellquote", |value: String| -> String {
+            // Use POSIX shell single-quote escaping:
+            // wrap in single quotes and escape any single quotes as '\''
+            format!("'{}'", value.replace('\'', "'\\''"))
+        });
+
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
 
         // Build the context object for template rendering
@@ -274,14 +329,19 @@ impl ContextResolver {
     pub fn ssh_host(&self) -> Option<&String> {
         self.ssh_host.as_ref()
     }
+
+    /// Get full SSH configuration (includes identity key, overrides, etc.)
+    pub fn ssh_config(&self) -> Option<&DocumentSshConfig> {
+        self.ssh_config.as_ref()
+    }
 }
 
 fn default_cwd() -> String {
     // Check for PWD env var first (set by shell, reflects current directory)
     // This allows CLI tools to inherit the user's current working directory
-    // Falls back to home directory for desktop app / GUI contexts
+    // Skip "/" as it's not useful - macOS sets PWD="/" when launching GUI apps from Finder
     if let Ok(pwd) = std::env::var("PWD") {
-        if !pwd.is_empty() {
+        if !pwd.is_empty() && pwd != "/" {
             return pwd;
         }
     }
@@ -339,6 +399,23 @@ impl Default for ContextResolver {
     }
 }
 
+impl ContextResolver {
+    /// Create a context resolver pre-populated with values from another resolver
+    ///
+    /// This is used for sub-runbook execution where the sub-runbook inherits
+    /// the parent's context but maintains isolation (changes don't propagate back)
+    pub fn from_parent(parent: &ContextResolver) -> Self {
+        Self {
+            vars: parent.vars.clone(),
+            cwd: parent.cwd.clone(),
+            env_vars: parent.env_vars.clone(),
+            ssh_host: parent.ssh_host.clone(),
+            ssh_config: parent.ssh_config.clone(),
+            extra_template_context: parent.extra_template_context.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 pub struct ContextResolverBuilder {
     vars: Option<HashMap<String, DocumentVar>>,
@@ -349,6 +426,7 @@ pub struct ContextResolverBuilder {
 }
 
 #[cfg(test)]
+#[allow(unused)]
 impl ContextResolverBuilder {
     pub fn new() -> Self {
         Self {
@@ -412,6 +490,7 @@ impl ContextResolverBuilder {
             cwd: self.cwd.unwrap_or_default(),
             env_vars: self.env_vars.unwrap_or_default(),
             ssh_host: self.ssh_host,
+            ssh_config: None,
             extra_template_context: self.extra_template_context.unwrap_or_default(),
         }
     }
@@ -427,13 +506,19 @@ mod tests {
     fn create_block_with_context(
         passive_context: BlockContext,
         active_context: Option<BlockContext>,
-    ) -> BlockWithContext {
+    ) -> DocumentBlock {
         let host = Host::builder()
             .id(uuid::Uuid::new_v4())
             .host("localhost")
             .build();
 
-        BlockWithContext::new(Block::Host(host), passive_context, active_context, None)
+        DocumentBlock::new(
+            Block::Host(host),
+            passive_context,
+            active_context,
+            None,
+            None,
+        )
     }
 
     #[test]

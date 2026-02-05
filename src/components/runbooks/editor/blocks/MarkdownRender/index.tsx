@@ -8,10 +8,12 @@ import {
   Minimize2,
 } from "lucide-react";
 import { createReactBlockSpec } from "@blocknote/react";
+import undent from "undent";
+import AIBlockRegistry from "@/lib/ai/block_registry";
 import { exportPropMatter } from "@/lib/utils";
 import track_event from "@/tracking";
 import { useBlockContext, useBlockExecution, useBlockState } from "@/lib/hooks/useDocumentBridge";
-import { useBlockLocalState } from "@/lib/hooks/useBlockLocalState";
+import { useBlockKvValue } from "@/lib/hooks/useKvValue";
 import { cn } from "@/lib/utils";
 import { MarkdownRenderState } from "@/rs-bindings/MarkdownRenderState";
 import Markdown from "../../components/Markdown";
@@ -39,8 +41,8 @@ interface MarkdownRenderProps {
  */
 const MarkdownRender = (props: MarkdownRenderProps) => {
   const context = useBlockContext(props.blockId);
-  const [collapsed, setCollapsed] = useBlockLocalState<boolean>(props.blockId, "collapsed", false);
-  const [isFullscreen, setIsFullscreen] = useBlockLocalState<boolean>(
+  const [collapsed, setCollapsed] = useBlockKvValue<boolean>(props.blockId, "collapsed", false);
+  const [isFullscreen, setIsFullscreen] = useBlockKvValue<boolean>(
     props.blockId,
     "fullscreen",
     false,
@@ -328,3 +330,27 @@ export default createReactBlockSpec(
     },
   },
 );
+
+AIBlockRegistry.getInstance().addBlock({
+  typeName: "markdown_render",
+  friendlyName: "Markdown Render",
+  shortDescription:
+    "Renders markdown content from a template variable.",
+  description: undent`
+    Markdown Render blocks display formatted markdown content from a template variable. Supports collapsing, fullscreen view, and automatic updates when the variable changes.
+
+    The available props are:
+    - variableName (string): The template variable containing markdown content
+    - maxLines (number): Maximum visible lines before scrolling (default: 12)
+
+    Useful for displaying formatted output from scripts, API responses, or documentation.
+
+    Example: {
+      "type": "markdown_render",
+      "props": {
+        "variableName": "readme_content",
+        "maxLines": 20
+      }
+    }
+  `,
+});

@@ -7,7 +7,8 @@ use typed_builder::TypedBuilder;
 use uuid::Uuid;
 
 use crate::blocks::{Block, BlockBehavior, FromDocument};
-use crate::execution::{BlockOutput, ExecutionContext, ExecutionHandle};
+use crate::context::BlockExecutionOutput;
+use crate::execution::{ExecutionContext, ExecutionHandle, StreamingBlockOutput};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
@@ -39,6 +40,45 @@ pub enum HttpVerb {
 impl HttpVerb {
     pub fn is_body_allowed(&self) -> bool {
         !matches!(self, HttpVerb::Get | HttpVerb::Head)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, TypedBuilder)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpExecutionOutput {
+    pub status: u16,
+    pub status_text: String,
+    pub status_success: bool,
+    pub headers: HashMap<String, String>,
+    pub duration_seconds: f64,
+    pub body: String,
+    pub body_json: Option<serde_json::Value>,
+}
+
+impl BlockExecutionOutput for HttpExecutionOutput {
+    fn get_template_value(&self, key: &str) -> Option<minijinja::Value> {
+        match key {
+            "status" => Some(minijinja::Value::from(self.status)),
+            "status_text" => Some(minijinja::Value::from(self.status_text.clone())),
+            "status_success" => Some(minijinja::Value::from(self.status_success)),
+            "headers" => Some(minijinja::Value::from_serialize(&self.headers)),
+            "duration_seconds" => Some(minijinja::Value::from(self.duration_seconds)),
+            "body" => Some(minijinja::Value::from(self.body.clone())),
+            "body_json" => Some(minijinja::Value::from_serialize(&self.body_json)),
+            _ => None,
+        }
+    }
+
+    fn enumerate_template_keys(&self) -> minijinja::value::Enumerator {
+        minijinja::value::Enumerator::Str(&[
+            "status",
+            "status_text",
+            "status_success",
+            "headers",
+            "duration_seconds",
+            "body",
+            "body_json",
+        ])
     }
 }
 
@@ -94,7 +134,16 @@ impl FromDocument for Http {
 
         let headers = props
             .get("headers")
-            .and_then(|v| v.as_object())
+            .and_then(|v| {
+                // Support both string format (from frontend) and object format (for backward compatibility)
+                if let Some(s) = v.as_str() {
+                    // Parse JSON string: "{\"key\":\"value\"}"
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(s).ok()
+                } else {
+                    // Direct object format
+                    v.as_object().cloned()
+                }
+            })
             .map(|obj| {
                 obj.iter()
                     .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
@@ -176,9 +225,22 @@ impl BlockBehavior for Http {
         let response = response.unwrap();
         let was_success = response.status_success;
 
+        let body_json = serde_json::from_str(&response.body).ok();
+        let output = HttpExecutionOutput {
+            status: response.status,
+            status_text: response.status_text.clone(),
+            status_success: response.status_success,
+            headers: response.headers.clone(),
+            duration_seconds: response.duration,
+            body: response.body.clone(),
+            body_json,
+        };
+
+        let _ = context.set_block_output(output).await;
+
         let _ = context
             .send_output(
-                BlockOutput::builder()
+                StreamingBlockOutput::builder()
                     .block_id(block_id)
                     .object(serde_json::to_value(response).map_err(|e| HttpError::Other(e.into()))?)
                     .build(),
@@ -914,6 +976,28 @@ mod tests {
         assert_eq!(http.verb, HttpVerb::Get);
         assert!(http.headers.is_empty());
         assert!(http.body.is_empty());
+    }
+
+    #[test]
+    fn test_from_document_with_string_headers() {
+        // Test that headers stored as JSON string (frontend format) are correctly parsed
+        let block_data = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000001",
+            "type": "http",
+            "props": {
+                "url": "https://api.example.com",
+                "headers": "{\"Access-Token\":\"abc123\",\"Content-Type\":\"application/json\"}"
+            }
+        });
+
+        let http = Http::from_document(&block_data).unwrap();
+
+        assert_eq!(http.headers.get("Access-Token").unwrap(), "abc123");
+        assert_eq!(
+            http.headers.get("Content-Type").unwrap(),
+            "application/json"
+        );
+        assert_eq!(http.headers.len(), 2);
     }
 
     #[test]

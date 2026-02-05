@@ -1,5 +1,5 @@
 site_name: Atuin Desktop Docs
-site_url: https://man.atuin.sh
+site_url: https://docs.atuin.sh/desktop/
 
 # Repository information
 repo_name: atuinsh/desktop
@@ -13,18 +13,12 @@ extra_css:
 
 nav:
   - "Home": index.md
-  - "Getting Started":
-      - "English": getting-started.md
-      - "日本語": getting-started_JA.md
-  - "Workspaces":
-      - "English": workspaces.md
-      - "日本語": workspaces_JA.md
-  - "Templating":
-      - "English": templating.md
-      - "日本語": templating_JA.md
-  - "Secrets":
-      - "English": secrets.md
-      - "日本語": secrets_JA.md
+  - "Getting Started": getting-started.md
+  - "AI Assistant": ai-assistant.md
+  - "Workspaces": workspaces.md
+  - "Templating": templating.md
+  - "Secrets": secrets.md
+  - "Shell Environment": shell-environment.md
   - "Blocks":
       - blocks/index.md
       - "Executable":
@@ -37,6 +31,8 @@ nav:
           - "Script": blocks/executable/script.md
           - "Terminal": blocks/executable/terminal.md
           - "Variable": blocks/executable/variable.md
+          - "Pause": blocks/executable/pause.md
+          - "Sub-Runbook": blocks/executable/sub-runbook.md
       - "Databases":
           - blocks/databases/index.md
           - "ClickHouse": blocks/databases/clickhouse.md
@@ -54,6 +50,7 @@ nav:
       - hub/getting-started.md
       - "Sharing Runbooks": hub/sharing-runbooks.md
       - "Collaborative Editing": hub/collaborative-editing.md
+  - "Troubleshooting": troubleshooting.md
 
 theme:
   logo: ./images/icon.svg
@@ -84,6 +81,13 @@ plugins:
   - git-revision-date-localized:
       enable_creation_date: true
       type: timeago
+  - multirepo:
+      imported_repo: true
+      url: https://github.com/atuinsh/docs
+      section_name: Desktop
+      paths: ["mkdocs.yml", "docs/index.md", "docs/stylesheets/*"]
+      yml_file: mkdocs.yml
+      branch: mkt/docs-migration
 
 markdown_extensions:
   - admonition

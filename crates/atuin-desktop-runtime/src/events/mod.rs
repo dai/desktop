@@ -31,6 +31,9 @@ pub enum GCEvent {
     /// Serial execution failed
     SerialExecutionFailed { runbook_id: Uuid, error: String },
 
+    /// Serial execution paused at a pause block
+    SerialExecutionPaused { runbook_id: Uuid, block_id: Uuid },
+
     /// PTY was opened and is ready for use
     PtyOpened(PtyMetadata),
 
@@ -68,6 +71,30 @@ pub enum GCEvent {
 
     /// SSH connection closed
     SshDisconnected { host: String },
+
+    /// SSH certificate file exists but failed to load (likely corrupted or invalid)
+    /// This is a warning - authentication will fall back to key-based auth
+    SshCertificateLoadFailed {
+        host: String,
+        cert_path: String,
+        error: String,
+    },
+
+    /// SSH certificate has expired
+    /// This is a warning - authentication fell back to key-based auth
+    SshCertificateExpired {
+        host: String,
+        cert_path: String,
+        valid_until: String,
+    },
+
+    /// SSH certificate is not yet valid
+    /// This is a warning - authentication fell back to key-based auth
+    SshCertificateNotYetValid {
+        host: String,
+        cert_path: String,
+        valid_from: String,
+    },
 
     /// Runbook execution started
     RunbookStarted { runbook_id: Uuid },

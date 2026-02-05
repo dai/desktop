@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import undent from "undent";
+import AIBlockRegistry from "@/lib/ai/block_registry";
 import {
   Button,
   Dropdown,
@@ -103,8 +105,8 @@ const Prometheus = ({
 }: PromProps) => {
   let editor = useBlockNoteEditor();
   const [value, setValue] = useState<string>(prometheus.query);
-  const [data, setData] = useState<any[]>([]);
-  const [config, _setConfig] = useState<{}>({});
+  const [data, setData] = useState<Array<Array<number>>>([]);
+  const [seriesNames, setSeriesNames] = useState<string[]>([]);
   const [timeFrame, setTimeFrame] = useState<TimeFrame>(
     timeOptions.find((t) => t.short === prometheus.period) || timeOptions[3],
   );
@@ -119,7 +121,8 @@ const Prometheus = ({
     if (output.object) {
       // Backend returns PrometheusQueryResult in the object field
       const result = output.object as PrometheusQueryResult;
-      setData(result.series as any[]);
+      setData(result.data);
+      setSeriesNames(result.seriesNames);
     }
   });
 
@@ -373,9 +376,11 @@ const Prometheus = ({
         ) : execution.isError ? (
           <ErrorCard error={execution.error} />
         ) : isRunning && data.length === 0 ? (
-          <Spinner />
+          <div className="flex items-center justify-center h-full w-full">
+            <Spinner />
+          </div>
         ) : (
-          <PromLineChart data={data} config={config} />
+          <PromLineChart data={data} seriesNames={seriesNames} />
         )}
       </div>
     </Block>
@@ -501,4 +506,41 @@ export const insertPrometheus = (schema: any) => (editor: typeof schema.BlockNot
   icon: <LineChartIcon size={18} />,
   aliases: ["prom", "promql", "grafana"],
   group: "Monitor",
+});
+
+AIBlockRegistry.getInstance().addBlock({
+  typeName: "prometheus",
+  friendlyName: "Prometheus",
+  shortDescription:
+    "Queries Prometheus and displays results as a chart.",
+  description: undent`
+    Prometheus blocks execute PromQL queries against a Prometheus server and display the results as interactive line charts.
+
+    The available props are:
+    - name (string): The display name of the block
+    - query (string): The PromQL query to execute
+    - endpoint (string): The Prometheus server URL
+    - period (string): Time range for the query (e.g., "5m", "1h", "24h")
+    - autoRefresh (number): Auto-refresh interval in milliseconds (0 to disable)
+
+    You can reference template variables in the endpoint and query: {{ var.variable_name }}.
+
+    OUTPUT ACCESS (requires block to have a name):
+    - output.series (array): Time series data
+    - output.total_series (number): Number of series returned
+    - output.time_range (object): Query time range
+
+    AUTHENTICATION:
+    Supports basic auth via URL (e.g., https://user:pass@prometheus.example.com).
+
+    Example: {
+      "type": "prometheus",
+      "props": {
+        "name": "CPU Usage",
+        "query": "rate(node_cpu_seconds_total{mode='user'}[5m])",
+        "endpoint": "{{ var.prometheus_url }}",
+        "period": "1h"
+      }
+    }
+  `,
 });

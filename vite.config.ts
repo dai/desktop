@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
 import { analyzer } from "vite-bundle-analyzer";
 import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -7,7 +8,14 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [
-    react(),
+    react({
+      babel: {
+        plugins: [
+          "babel-plugin-react-compiler",
+          ["@babel/plugin-proposal-decorators", { legacy: true }],
+        ],
+      },
+    }),
     tsconfigPaths(),
     sentryVitePlugin({
       /* @ts-ignore */
@@ -15,7 +23,12 @@ export default defineConfig(async () => ({
       org: "atuin",
       project: "desktop-frontend",
       telemetry: false,
-      debug: true,
+      disable: process.env.CI && process.platform !== 'linux',
+      debug: false,
+      sourcemaps: {
+        // keep sourcemaps for edge builds in the final bundle
+        filesToDeleteAfterUpload: process.env.IS_EDGE_BUILD ? [] : ["./dist/assets/*.map"],
+      },
     }),
     analyzer({
       analyzerMode: "static",
@@ -25,8 +38,15 @@ export default defineConfig(async () => ({
   build: {
     sourcemap: true,
     rollupOptions: {
+      input: {
+        main: resolve(__dirname, 'index.html'),
+        llmtools: resolve(__dirname, 'llmtools.html'),
+      },
       output: {
         experimentalMinChunkSize: 100_000,
+        manualChunks: {
+          'lucide': ['lucide-react'],
+        },
       },
     },
   },

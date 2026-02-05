@@ -80,6 +80,11 @@ pub(crate) fn initialize_menu_handlers<R: Runtime>(handle: &AppHandle<R>) {
                 window.open_devtools();
             }
         }
+        "show-llmtools" => {
+            if let Err(e) = crate::llmtools_window::create_llmtools_window(app_handle) {
+                log::error!("Failed to open LLM Tools window: {}", e);
+            }
+        }
         other_id if other_id.starts_with("link-menu-item:") => {
             let href = other_id.splitn(3, ":").nth(2);
             if let Some(href) = href {
@@ -166,6 +171,16 @@ fn show_devtools<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
     Ok(show_devtools)
 }
 
+#[allow(dead_code)]
+fn show_llmtools<R: Runtime>(handle: &AppHandle<R>) -> Result<MenuItem<R>> {
+    let show_llmtools = MenuItemBuilder::new("LLM Tools")
+        .id("show-llmtools")
+        .accelerator("CmdOrCtrl+Shift+L")
+        .build(handle)?;
+
+    Ok(show_llmtools)
+}
+
 fn link_menu_item<R: Runtime>(
     id: IdWithNoColons,
     name: &str,
@@ -250,6 +265,12 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>, tab_items: &[TabItem]) -> Res
         "Help",
         true,
         &[
+            &link_menu_item(
+                "documentation".try_into()?,
+                "Documentation",
+                "https://docs.atuin.sh",
+                app_handle,
+            )?,
             &open_new_runtime_explainer_runbook(app_handle)?,
             &PredefinedMenuItem::separator(app_handle)?,
             &link_menu_item(
@@ -294,13 +315,6 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>, tab_items: &[TabItem]) -> Res
                     &PredefinedMenuItem::quit(app_handle, Some("Quit Atuin Desktop"))?,
                 ],
             )?,
-            #[cfg(not(any(
-                target_os = "linux",
-                target_os = "dragonfly",
-                target_os = "freebsd",
-                target_os = "netbsd",
-                target_os = "openbsd"
-            )))]
             &Submenu::with_items(
                 app_handle,
                 "File",
@@ -348,7 +362,7 @@ pub fn menu<R: Runtime>(app_handle: &AppHandle<R>, tab_items: &[TabItem]) -> Res
                 app_handle,
                 "Developer",
                 true,
-                &[&show_devtools(app_handle)?],
+                &[&show_devtools(app_handle)?, &show_llmtools(app_handle)?],
             )?,
             #[cfg(target_os = "macos")]
             &Submenu::with_items(

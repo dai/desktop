@@ -8,9 +8,10 @@ use bytes::Bytes;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::interval;
 
+use crate::context::DocumentSshConfig;
 use crate::pty::PtyMetadata;
 use crate::ssh::pool::Pool;
-use crate::ssh::session::{Authentication, Session};
+use crate::ssh::session::{Authentication, OutputLine, Session, SshWarning};
 use eyre::Result;
 use std::sync::Arc;
 
@@ -83,13 +84,19 @@ pub enum SshPoolMessage {
         channel: String,
 
         // The stream of output from the exec command
-        output_stream: mpsc::Sender<String>,
+        output_stream: mpsc::Sender<OutputLine>,
 
         // The actual result of the exec command
         reply_to: oneshot::Sender<Result<()>>,
 
         // Stored internally and used for the corresponding exec_finished message
         result_tx: oneshot::Sender<()>,
+
+        // Optional SSH config overrides from block settings
+        ssh_config: Option<DocumentSshConfig>,
+
+        // Channel to send authentication warnings (certificate issues, etc.)
+        warnings_tx: Option<oneshot::Sender<Vec<SshWarning>>>,
     },
     ExecFinished {
         channel: String,
@@ -106,11 +113,19 @@ pub enum SshPoolMessage {
         height: u16,
         // Stream to receive output from the pty
         output_stream: mpsc::Sender<String>,
+        // SSH config with identity key overrides
+        ssh_config: Option<DocumentSshConfig>,
 
         // The actual result of the open_pty command
-        // returns a channel to send input to the pty
+        // returns a channel to send input to the pty, plus any auth warnings
         #[allow(clippy::type_complexity)]
-        reply_to: oneshot::Sender<Result<(mpsc::Sender<Bytes>, mpsc::Sender<(u16, u16)>)>>,
+        reply_to: oneshot::Sender<
+            Result<(
+                mpsc::Sender<Bytes>,
+                mpsc::Sender<(u16, u16)>,
+                Vec<SshWarning>,
+            )>,
+        >,
     },
     ClosePty {
         channel: String,
@@ -193,6 +208,28 @@ impl SshPoolHandle {
         receiver.await.unwrap()
     }
 
+    /// Disconnect all connections to a given host, regardless of username.
+    pub async fn disconnect_by_host(&self, host: &str) -> Result<()> {
+        let connections = self
+            .list_connections()
+            .await
+            .map_err(|_| eyre::eyre!("Failed to list connections"))?;
+
+        for key in connections {
+            // Connection keys are "username@host" - split and match host exactly
+            if let Some(at_pos) = key.rfind('@') {
+                let key_host = &key[at_pos + 1..];
+                if key_host == host {
+                    let username = &key[..at_pos];
+                    tracing::debug!("Disconnecting SSH connection: {key}");
+                    let _ = self.disconnect(host, username).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn list_connections(&self) -> Result<Vec<String>, oneshot::error::RecvError> {
         let (sender, receiver) = oneshot::channel();
         let msg = SshPoolMessage::ListConnections { reply_to: sender };
@@ -218,8 +255,35 @@ impl SshPoolHandle {
         interpreter: &str,
         command: &str,
         channel: &str,
-        output_stream: mpsc::Sender<String>,
+        output_stream: mpsc::Sender<OutputLine>,
         result_tx: oneshot::Sender<()>,
+    ) -> Result<()> {
+        self.exec_with_config(
+            host,
+            username,
+            interpreter,
+            command,
+            channel,
+            output_stream,
+            result_tx,
+            None,
+            None,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn exec_with_config(
+        &self,
+        host: &str,
+        username: Option<&str>,
+        interpreter: &str,
+        command: &str,
+        channel: &str,
+        output_stream: mpsc::Sender<OutputLine>,
+        result_tx: oneshot::Sender<()>,
+        ssh_config: Option<DocumentSshConfig>,
+        warnings_tx: Option<oneshot::Sender<Vec<SshWarning>>>,
     ) -> Result<()> {
         let (sender, receiver) = oneshot::channel();
         let msg = SshPoolMessage::Exec {
@@ -231,6 +295,8 @@ impl SshPoolHandle {
             output_stream,
             reply_to: sender,
             result_tx,
+            ssh_config,
+            warnings_tx,
         };
 
         let _ = self.sender.send(msg).await;
@@ -265,7 +331,30 @@ impl SshPoolHandle {
         output_stream: mpsc::Sender<String>,
         width: u16,
         height: u16,
-    ) -> Result<(mpsc::Sender<Bytes>, mpsc::Sender<(u16, u16)>)> {
+    ) -> Result<(
+        mpsc::Sender<Bytes>,
+        mpsc::Sender<(u16, u16)>,
+        Vec<SshWarning>,
+    )> {
+        self.open_pty_with_config(host, username, channel, output_stream, width, height, None)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn open_pty_with_config(
+        &self,
+        host: &str,
+        username: Option<&str>,
+        channel: &str,
+        output_stream: mpsc::Sender<String>,
+        width: u16,
+        height: u16,
+        ssh_config: Option<DocumentSshConfig>,
+    ) -> Result<(
+        mpsc::Sender<Bytes>,
+        mpsc::Sender<(u16, u16)>,
+        Vec<SshWarning>,
+    )> {
         let (reply_sender, reply_receiver) = oneshot::channel();
 
         let msg = SshPoolMessage::OpenPty {
@@ -276,6 +365,7 @@ impl SshPoolHandle {
             reply_to: reply_sender,
             width,
             height,
+            ssh_config,
         };
 
         let _ = self.sender.send(msg).await;
@@ -454,12 +544,14 @@ impl SshPool {
                 auth,
                 reply_to,
             } => {
+                tracing::trace!("Handling Connect message for {host} with username {username:?}");
                 let result = self
                     .pool
                     .write()
                     .await
                     .connect(&host, username.as_deref(), auth, None)
-                    .await;
+                    .await
+                    .map(|(session, _auth_result)| session);
 
                 let _ = reply_to.send(result);
             }
@@ -468,15 +560,18 @@ impl SshPool {
                 username,
                 reply_to,
             } => {
+                tracing::trace!("Handling Disconnect message for {host} with username {username}");
                 let result = self.pool.write().await.disconnect(&host, &username).await;
                 let _ = reply_to.send(result);
             }
             SshPoolMessage::ListConnections { reply_to } => {
+                tracing::trace!("Handling ListConnections message");
                 // Get the keys from the pool's connections
                 let connections = self.pool.read().await.connections.keys().cloned().collect();
                 let _ = reply_to.send(connections);
             }
             SshPoolMessage::Len { reply_to } => {
+                tracing::trace!("Handling Len message");
                 let len = self.pool.read().await.connections.len();
                 let _ = reply_to.send(len);
             }
@@ -489,10 +584,22 @@ impl SshPool {
                 output_stream,
                 reply_to,
                 result_tx,
+                ssh_config,
+                warnings_tx,
             } => {
+                tracing::trace!(
+                    "Executing command on {host} with {interpreter} with username {username:?}"
+                );
                 let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
-                let username = username.unwrap_or_else(whoami::username);
+                // Resolve username: block override > provided > SSH config > current user
+                let resolved_ssh_config = Session::resolve_ssh_config(&host);
+                let username = ssh_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user.clone())
+                    .or(username)
+                    .or(resolved_ssh_config.username)
+                    .unwrap_or_else(whoami::username);
                 self.channels.insert(
                     channel.clone(),
                     ChannelMeta {
@@ -512,19 +619,30 @@ impl SshPool {
                 tokio::spawn(async move {
                     tracing::trace!("Connecting to SSH host {host} with username {username}");
                     let mut pool_guard = pool.write().await;
-                    let session: Result<Arc<Session>, SshPoolConnectionError> = tokio::select! {
-                        result = pool_guard.connect(&host, Some(username.as_str()), None, Some(connect_cancel_rx)) => {
+                    let (session, warnings): (
+                        Result<Arc<Session>, SshPoolConnectionError>,
+                        Vec<SshWarning>,
+                    ) = tokio::select! {
+                        result = pool_guard.connect_with_config(&host, Some(username.as_str()), None, Some(connect_cancel_rx), ssh_config.as_ref()) => {
                             tracing::trace!("SSH connection to {host} with username {username} successful");
-                            result.map_err(SshPoolConnectionError::from)
+                            match result {
+                                Ok((session, auth_result)) => (Ok(session), auth_result.warnings),
+                                Err(e) => (Err(SshPoolConnectionError::from(e)), Vec::new()),
+                            }
                         }
                         _ = &mut cancel_rx => {
                             tracing::trace!("SSH connection to {host} with username {username} cancelled");
                             let _ = connect_cancel_tx.send(());
                             let _ = pool_guard.disconnect(&host, &username).await;
-                            Err(SshPoolConnectionError::Cancelled)
+                            (Err(SshPoolConnectionError::Cancelled), Vec::new())
                         }
                     };
                     drop(pool_guard);
+
+                    // Send warnings to caller if they requested them
+                    if let Some(tx) = warnings_tx {
+                        let _ = tx.send(warnings);
+                    }
 
                     let session = match session {
                         Ok(session) => session,
@@ -590,6 +708,7 @@ impl SshPool {
                 });
             }
             SshPoolMessage::ExecFinished { channel, reply_to } => {
+                tracing::trace!("Handling ExecFinished message for channel {channel}");
                 tracing::debug!("ExecFinished for channel: {channel}");
 
                 if let Some(meta) = self.channels.remove(&channel) {
@@ -599,6 +718,7 @@ impl SshPool {
                 let _ = reply_to.send(Ok(()));
             }
             SshPoolMessage::ExecCancel { channel } => {
+                tracing::trace!("Handling ExecCancel message for channel {channel}");
                 tracing::debug!("ExecCancel for channel: {channel}");
 
                 if let Some(meta) = self.channels.remove(&channel) {
@@ -614,17 +734,33 @@ impl SshPool {
                 reply_to,
                 width,
                 height,
+                ssh_config,
             } => {
-                let username = username.unwrap_or_else(whoami::username);
-                let session = self
+                tracing::trace!("Handling OpenPty message for {host} with username {username:?} with channel {channel}");
+                // Resolve username: block override > provided > SSH config > current user
+                let resolved_ssh_config = Session::resolve_ssh_config(&host);
+                let username = ssh_config
+                    .as_ref()
+                    .and_then(|cfg| cfg.user.clone())
+                    .or(username)
+                    .or(resolved_ssh_config.username)
+                    .unwrap_or_else(whoami::username);
+
+                let connect_result = self
                     .pool
                     .write()
                     .await
-                    .connect(&host, Some(username.as_str()), None, None)
+                    .connect_with_config(
+                        &host,
+                        Some(username.as_str()),
+                        None,
+                        None,
+                        ssh_config.as_ref(),
+                    )
                     .await;
 
-                let session = match session {
-                    Ok(session) => session,
+                let (session, auth_result) = match connect_result {
+                    Ok((session, auth_result)) => (session, auth_result),
                     Err(e) => {
                         tracing::error!("Failed to connect to SSH host {host}: {e}");
                         if let Err(e) = reply_to.send(Err(e)) {
@@ -694,7 +830,7 @@ impl SshPool {
                         let _ = reply_to.send(Err(e));
                     }
                     Ok(_) => {
-                        let _ = reply_to.send(Ok((input_tx, resize_tx)));
+                        let _ = reply_to.send(Ok((input_tx, resize_tx, auth_result.warnings)));
                     }
                 }
             }
@@ -703,6 +839,7 @@ impl SshPool {
                 input,
                 reply_to,
             } => {
+                tracing::trace!("Handling PtyWrite message for channel {channel}");
                 if let Some(meta) = self.channels.get_mut(&channel) {
                     if let Some(pty_input_tx) = meta.pty_input_tx.as_mut() {
                         let _ = pty_input_tx.send(input.clone()).await;
@@ -721,12 +858,14 @@ impl SshPool {
                 }
             }
             SshPoolMessage::ClosePty { channel } => {
+                tracing::trace!("Handling ClosePty message for channel {channel}");
                 tracing::debug!("Closing PTY for {channel}");
                 if let Some(meta) = self.channels.remove(&channel) {
                     let _ = meta.cancel_tx.send(());
                 }
             }
             SshPoolMessage::HealthCheck { reply_to } => {
+                tracing::trace!("Handling HealthCheck message");
                 let connection_count = self.pool.read().await.connections.len();
                 tracing::debug!(
                     "Running SSH connection health check with keepalives on {connection_count} connections"
@@ -764,12 +903,13 @@ impl SshPool {
                 prefix,
                 reply_to,
             } => {
+                tracing::trace!("Handling CreateTempFile message for {host} with username {username:?} with prefix {prefix}");
                 let mut pool_guard = self.pool.write().await;
                 let session = match pool_guard
                     .connect(&host, username.as_deref(), None, None)
                     .await
                 {
-                    Ok(session) => session,
+                    Ok((session, _auth_result)) => session,
                     Err(e) => {
                         let _ = reply_to.send(Err(e));
                         return;
@@ -786,12 +926,13 @@ impl SshPool {
                 path,
                 reply_to,
             } => {
+                tracing::trace!("Handling ReadFile message for {host} with username {username:?} with path {path}");
                 let mut pool_guard = self.pool.write().await;
                 let session = match pool_guard
                     .connect(&host, username.as_deref(), None, None)
                     .await
                 {
-                    Ok(session) => session,
+                    Ok((session, _auth_result)) => session,
                     Err(e) => {
                         let _ = reply_to.send(Err(e));
                         return;
@@ -808,12 +949,13 @@ impl SshPool {
                 path,
                 reply_to,
             } => {
+                tracing::trace!("Handling DeleteFile message for {host} with username {username:?} with path {path}");
                 let mut pool_guard = self.pool.write().await;
                 let session = match pool_guard
                     .connect(&host, username.as_deref(), None, None)
                     .await
                 {
-                    Ok(session) => session,
+                    Ok((session, _auth_result)) => session,
                     Err(e) => {
                         let _ = reply_to.send(Err(e));
                         return;

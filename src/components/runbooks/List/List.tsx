@@ -10,14 +10,25 @@ import {
   CircularProgress,
   Avatar,
   DropdownSection,
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
 } from "@heroui/react";
 import {
-  ArrowUpDownIcon,
+  BookOpenIcon,
+  ChartBarBigIcon,
   ChevronDownIcon,
+  CircleHelpIcon,
   ExternalLinkIcon,
-  FileSearchIcon,
+  HistoryIcon,
+  LogOutIcon,
+  MailPlusIcon,
+  MessageCircleHeartIcon,
   Plus,
   PlusIcon,
+  SearchIcon,
+  SettingsIcon,
+  TerminalIcon,
   UsersIcon,
 } from "lucide-react";
 import { AtuinState, useStore } from "@/state/store";
@@ -25,7 +36,6 @@ import { forwardRef, useContext, useEffect, useImperativeHandle, useRef, useStat
 import { cn } from "@/lib/utils";
 import { PendingInvitations } from "./PendingInvitations";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Menu } from "@tauri-apps/api/menu";
 import { SortBy } from "./TreeView";
 import { orgWorkspaces, userOwnedWorkspaces } from "@/lib/queries/workspaces";
 import { default as WorkspaceComponent } from "./Workspace";
@@ -43,6 +53,9 @@ import track_event from "@/tracking";
 import { open } from "@tauri-apps/plugin-shell";
 import AtuinEnv from "@/atuin_env";
 import Workspace from "@/state/runbooks/workspace";
+import { TabIcon } from "@/state/store/ui_state";
+import { clearHubApiToken } from "@/api/auth";
+import SocketManager from "@/socket";
 
 const scrollWorkspaceIntoViewGenerator =
   (elRef: React.RefObject<HTMLDivElement | null>) => async (workspaceId: string) => {
@@ -101,20 +114,25 @@ interface NotesSidebarProps {
     newWorkspaceId: string,
     newParentFolderId: string | null,
   ) => void;
+  onOpenFeedback: () => void;
+  onOpenInvite: () => void;
 }
 
 const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRef<ListApi>) => {
   const isSyncing = useStore((state: AtuinState) => state.isSyncing);
-  const [isSearchOpen, setSearchOpen] = useStore((store: AtuinState) => [
-    store.searchOpen,
-    store.setSearchOpen,
-  ]);
-  const [sortBy, setSortBy] = useState<SortBy>(SortBy.Name);
+  const isSearchOpen = useStore((store: AtuinState) => store.searchOpen);
+  const setSearchOpen = useStore((store: AtuinState) => store.setSearchOpen);
+  const isCommandPaletteOpen = useStore((store: AtuinState) => store.commandPaletteOpen);
+  const setCommandPaletteOpen = useStore((store: AtuinState) => store.setCommandPaletteOpen);
+  const [sortBy] = useState<SortBy>(SortBy.Name);
   const [pendingWorkspaceMigration, setPendingWorkspaceMigration] = useState<boolean>(true);
   const [focusedWorkspaceId, setFocusedWorkspaceId] = useState<string | null>(null);
 
   const currentWorkspaceId = useStore((state: AtuinState) => state.currentWorkspaceId);
   const setCurrentWorkspaceId = useStore((state: AtuinState) => state.setCurrentWorkspaceId);
+  const openTab = useStore((state: AtuinState) => state.openTab);
+  const isLoggedIn = useStore((state: AtuinState) => state.isLoggedIn);
+  const refreshUser = useStore((state: AtuinState) => state.refreshUser);
 
   const elRef = useRef<HTMLDivElement>(null);
   const scrollWorkspaceIntoView = scrollWorkspaceIntoViewGenerator(elRef);
@@ -156,6 +174,10 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
     if (!isSearchOpen) setSearchOpen(true);
   };
 
+  const handleOpenCommandPalette = async () => {
+    if (!isCommandPaletteOpen) setCommandPaletteOpen(true);
+  };
+
   const handleBrowseToOwner = (owner: string) => {
     open(AtuinEnv.url(`/${owner}`));
   };
@@ -168,50 +190,39 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
     open(AtuinEnv.url(`/${user.username}?tab=orgs`));
   };
 
-  async function handleOpenSortMenu() {
-    const sortMenu = await Menu.new({
-      id: "sort_menu",
-      items: [
-        {
-          id: "sort_by_name_desc",
-          text: "Name",
-          action: () => {
-            setSortBy(SortBy.Name);
-          },
-          accelerator: "N",
-          checked: sortBy === SortBy.Name,
-        },
-        {
-          id: "sort_by_name_asc",
-          text: "Name (ascending)",
-          action: () => {
-            setSortBy(SortBy.NameAsc);
-          },
-          accelerator: "Shift+N",
-          checked: sortBy === SortBy.NameAsc,
-        },
-        {
-          id: "sort_by_updated",
-          text: "Updated",
-          action: () => {
-            setSortBy(SortBy.Updated);
-          },
-          accelerator: "U",
-          checked: sortBy === SortBy.Updated,
-        },
-        {
-          id: "sort_by_updated_asc",
-          text: "Updated (ascending)",
-          action: () => {
-            setSortBy(SortBy.UpdatedAsc);
-          },
-          accelerator: "Shift+U",
-          checked: sortBy === SortBy.UpdatedAsc,
-        },
-      ],
-    });
-    await sortMenu.popup();
-    sortMenu.close();
+  function handleBrowseToPersonalProfile() {
+    handleBrowseToOwner(user.username);
+  }
+
+  function handleSelectPersonalOrg() {
+    setSelectedOrg(null);
+    track_event("org.switch", { to: "personal" });
+  }
+
+  function handleNewRunbookInCurrentWorkspace() {
+    handleNewRunbook(currentWorkspaceId, null);
+  }
+
+  function handleStartDeleteRunbook(_workspaceId: string, runbookId: string) {
+    promptDeleteRunbook(runbookId);
+  }
+
+  function handleOpenHistory() {
+    openTab("/history", "History", TabIcon.HISTORY);
+  }
+
+  function handleOpenStats() {
+    openTab("/stats", "Stats", TabIcon.STATS);
+  }
+
+  function handleOpenSettings() {
+    openTab("/settings", "Settings", TabIcon.SETTINGS);
+  }
+
+  async function handleLogout() {
+    await clearHubApiToken();
+    SocketManager.setApiToken(null);
+    refreshUser();
   }
 
   async function handleNewRunbookMenu() {
@@ -277,13 +288,14 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
   return (
     <div
       className={cn([
-        "relative h-full bg-gray-50 dark:bg-content1 border-r border-gray-200 dark:border-default-300 select-none flex flex-col",
+        "relative h-full sidebar-bg border-r border-gray-200/50 dark:border-zinc-700/50 select-none flex flex-col",
       ])}
       style={{
         width: "100%",
         height: "100%",
       }}
       ref={elRef}
+      data-tauri-drag-region
     >
       {pendingWorkspaceMigration && (
         <>
@@ -307,18 +319,20 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
             classNames={{ track: "bg-transparent" }}
           />
           <PendingInvitations />
-          <div className="border-b border-gray-200 dark:border-gray-600">
+          <div
+            className="border-b border-gray-100 dark:border-gray-800 pt-4"
+          >
             <Dropdown showArrow size="lg" placement="bottom-end">
               <DropdownTrigger>
                 <div
                   className={cn(
-                    "flex flex-row justify-between items-center p-2 pl-4",
+                    "flex flex-row justify-between items-center pt-2 pb-3 px-2 pl-3",
                     "hover:bg-gray-100 dark:hover:bg-content2",
                     "cursor-pointer",
-                    "border-b border-gray-200 dark:border-gray-700",
-                    "h-[56px] max-h-[56px] min-h-[56px]",
+                    "border-b border-gray-100 dark:border-gray-800",
                   )}
                 >
+                  <div className="flex items-center gap-2">
                   {selectedOrg && (
                     <h2 className="text-lg font-semibold flex items-center gap-2">
                       {org?.avatar_url && (
@@ -353,6 +367,7 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
                       )}
                     </h2>
                   )}
+                  </div>
                   <ChevronDownIcon size={16} />
                 </div>
               </DropdownTrigger>
@@ -376,7 +391,7 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
                         isIconOnly
                         size="sm"
                         variant="light"
-                        onPress={() => handleBrowseToOwner(user.username)}
+                        onPress={handleBrowseToPersonalProfile}
                       >
                         <ExternalLinkIcon
                           size={18}
@@ -384,10 +399,7 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
                         />
                       </Button>
                     }
-                    onPress={() => {
-                      setSelectedOrg(null);
-                      track_event("org.switch", { to: "personal" });
-                    }}
+                    onPress={handleSelectPersonalOrg}
                   >
                     {user.isLoggedIn() ? <h3>{user.username} (Personal)</h3> : <h3>Personal</h3>}
                   </DropdownItem>
@@ -450,42 +462,155 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
               </DropdownMenu>
             </Dropdown>
 
-            <div className="flex justify-between items-center p-2">
-              <ButtonGroup>
+            {/* Nav Items */}
+            <div className="flex flex-row px-2 pt-3 pb-2 justify-evenly">
+              <Tooltip
+                content={
+                  <span className="flex items-center gap-1.5">
+                    Search <kbd className="px-1 py-0.5 text-[10px] bg-gray-600/50 rounded">⌘P</kbd>
+                  </span>
+                }
+                placement="bottom"
+                delay={300}
+                classNames={{
+                  content: "text-xs py-1 px-2 bg-gray-800/90 dark:bg-gray-900/90 text-white rounded shadow-sm",
+                }}
+              >
                 <Button
+                  variant="light"
                   size="sm"
-                  variant="flat"
-                  onPress={() => handleNewRunbook(currentWorkspaceId, null)}
-                >
-                  <Plus size={18} /> New Runbook
-                </Button>
-                <Button
-                  size="sm"
-                  variant="flat"
                   isIconOnly
-                  className="border-l-2 border-gray-200 dark:border-gray-700"
-                  onPress={() => handleNewRunbookMenu()}
+                  onPress={handleOpenSearch}
                 >
-                  <ChevronDownIcon size={18} />
+                  <SearchIcon size={18} />
                 </Button>
-              </ButtonGroup>
-
-              <div>
-                {false && (
-                  <Tooltip content="Sort by...">
-                    <Button isIconOnly size="sm" variant="light" onPress={handleOpenSortMenu}>
-                      <ArrowUpDownIcon size={18} />
-                    </Button>
-                  </Tooltip>
-                )}
-
-                <Tooltip content="Search" placement="bottom">
-                  <Button isIconOnly size="sm" variant="light" onPress={handleOpenSearch}>
-                    <FileSearchIcon size={18} />
+              </Tooltip>
+              <Tooltip
+                content={
+                  <span className="flex items-center gap-1.5">
+                    Commands <kbd className="px-1 py-0.5 text-[10px] bg-gray-600/50 rounded">⇧⌘P</kbd>
+                  </span>
+                }
+                placement="bottom"
+                delay={300}
+                classNames={{
+                  content: "text-xs py-1 px-2 bg-gray-800/90 dark:bg-gray-900/90 text-white rounded shadow-sm",
+                }}
+              >
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
+                  onPress={handleOpenCommandPalette}
+                >
+                  <TerminalIcon size={18} />
+                </Button>
+              </Tooltip>
+              <Tooltip
+                content="History"
+                placement="bottom"
+                delay={300}
+                classNames={{
+                  content: "text-xs py-1 px-2 bg-gray-800/90 dark:bg-gray-900/90 text-white rounded shadow-sm",
+                }}
+              >
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
+                  onPress={handleOpenHistory}
+                >
+                  <HistoryIcon size={18} />
+                </Button>
+              </Tooltip>
+              <Tooltip
+                content="Stats"
+                placement="bottom"
+                delay={300}
+                classNames={{
+                  content: "text-xs py-1 px-2 bg-gray-800/90 dark:bg-gray-900/90 text-white rounded shadow-sm",
+                }}
+              >
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
+                  onPress={handleOpenStats}
+                >
+                  <ChartBarBigIcon size={18} />
+                </Button>
+              </Tooltip>
+              <Dropdown placement="bottom-end">
+                <DropdownTrigger>
+                  <Button
+                    variant="light"
+                    size="sm"
+                    isIconOnly
+                  >
+                    <CircleHelpIcon size={18} />
                   </Button>
-                </Tooltip>
-              </div>
+                </DropdownTrigger>
+                <DropdownMenu
+                  aria-label="Help menu"
+                  items={[
+                    { key: "docs", label: "Documentation", icon: BookOpenIcon, action: () => open("https://docs.atuin.sh/desktop") },
+                    { key: "feedback", label: "Send Feedback", icon: MessageCircleHeartIcon, action: props.onOpenFeedback },
+                    ...(isLoggedIn() ? [{ key: "invite", label: "Invite Friends", icon: MailPlusIcon, action: props.onOpenInvite }] : []),
+                  ]}
+                >
+                  {(item) => (
+                    <DropdownItem
+                      key={item.key}
+                      startContent={<item.icon size={16} />}
+                      onPress={item.action}
+                    >
+                      {item.label}
+                    </DropdownItem>
+                  )}
+                </DropdownMenu>
+              </Dropdown>
+              <Tooltip
+                content="Settings"
+                placement="bottom"
+                delay={300}
+                classNames={{
+                  content: "text-xs py-1 px-2 bg-gray-800/90 dark:bg-gray-900/90 text-white rounded shadow-sm",
+                }}
+              >
+                <Button
+                  variant="light"
+                  size="sm"
+                  isIconOnly
+                  onPress={handleOpenSettings}
+                >
+                  <SettingsIcon size={18} />
+                </Button>
+              </Tooltip>
             </div>
+          </div>
+
+          {/* Workspaces Section */}
+          <div className="p-2">
+            <ButtonGroup className="w-full">
+              <Button
+                size="sm"
+                variant="flat"
+                color="success"
+                className="flex-1"
+                onPress={handleNewRunbookInCurrentWorkspace}
+              >
+                <Plus size={18} /> New Runbook
+              </Button>
+              <Button
+                size="sm"
+                variant="flat"
+                color="success"
+                isIconOnly
+                onPress={handleNewRunbookMenu}
+              >
+                <ChevronDownIcon size={18} />
+              </Button>
+            </ButtonGroup>
           </div>
           <div
             className="p-1 flex-grow overflow-y-auto cursor-default"
@@ -507,14 +632,9 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
                           focused={focusedWorkspaceId === workspace.get("id")}
                           sortBy={sortBy}
                           onActivateRunbook={activateRunbook}
-                          onStartCreateRunbook={(
-                            workspaceId: string,
-                            parentFolderId: string | null,
-                          ) => handleNewRunbook(workspaceId, parentFolderId)}
+                          onStartCreateRunbook={handleNewRunbook}
                           onStartCreateWorkspace={props.onStartCreateWorkspace}
-                          onStartDeleteRunbook={(_workspaceId: string, runbookId: string) =>
-                            promptDeleteRunbook(runbookId)
-                          }
+                          onStartDeleteRunbook={handleStartDeleteRunbook}
                           onStartMoveItemsToWorkspace={props.moveItemsToWorkspace}
                         />
                       </div>
@@ -524,6 +644,46 @@ const NoteSidebar = forwardRef((props: NotesSidebarProps, ref: React.ForwardedRe
               )}
             </DndProvider>
           </div>
+
+          {/* User Info */}
+          {user.isLoggedIn() && (
+            <div className="border-t border-gray-100 dark:border-gray-800 px-2 py-2">
+              <Popover placement="right" offset={10} crossOffset={40}>
+                <PopoverTrigger>
+                  <div className="flex items-center gap-2 px-1 py-1 text-sm text-gray-500 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-content2 rounded">
+                    <Avatar
+                      src={user.avatar_url || ""}
+                      size="sm"
+                      radius="full"
+                      classNames={{ base: "min-w-[24px] w-6 h-6" }}
+                      name={user.username}
+                    />
+                    <span className="truncate">{user.username}</span>
+                  </div>
+                </PopoverTrigger>
+                <PopoverContent className="p-0">
+                  <div className="flex flex-col min-w-[200px]">
+                    <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-700">
+                      <div className="flex flex-col gap-1">
+                        <span className="font-medium">{user.username}</span>
+                        <span className="text-xs text-gray-500">{user.email}</span>
+                        {user.bio && (
+                          <span className="text-xs text-gray-400 mt-1">{user.bio}</span>
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleLogout}
+                      className="flex items-center gap-2 px-3 py-2 text-danger hover:bg-danger/10 transition-colors text-left"
+                    >
+                      <LogOutIcon size={16} />
+                      Sign out
+                    </button>
+                  </div>
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
         </>
       )}
     </div>
